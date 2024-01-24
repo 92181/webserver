@@ -88,7 +88,7 @@ int main() // Main;
                 {
                     if(*a==136) // Handle WebSocket disconnect;
                     {
-                        SSL_shutdown(*s5);SSL_free(*s5);close(*f);n=f;x=f+1;s3=s5;s4=s5+1;while(x<z){*n=*x;*s5=*s4;n+=1;x+=1;s3+=1;s4+=1;}z-=1;continue;
+                        SSL_shutdown(*s5);SSL_free(*s5);close(*f);n=f;x=f+1;s3=s5;s4=s5+1;while(x<z){*n=*x;*s5=*s4;n+=1;x+=1;s3+=1;s4+=1;}z-=1;s0-=1;continue;
                     };
 
                     i5=a+2;i4=*(a+1)&127;if(i4>125){if(i4==126){i4=*(a+2)|*(a+3)<<8;i5+=2;}else{i4=65536;i5+=7;};};ir=*i5;i6=*(i5+1);i7=*(i5+2);i8=*(i5+3);ix=iq=i5+4;i9=ix+i4;io=ix+1;ip=io+1;ia=ip+1;
@@ -98,7 +98,7 @@ int main() // Main;
                 }
                 else if(t0==0) // Handle TCP disconnect;
                 {
-                    SSL_shutdown(*s5);SSL_free(*s5);close(*f);n=f;x=f+1;s3=s5;s4=s5+1;while(x<z){*n=*x;*s5=*s4;n+=1;x+=1;s3+=1;s4+=1;}z-=1;continue;
+                    SSL_shutdown(*s5);SSL_free(*s5);close(*f);n=f;x=f+1;s3=s5;s4=s5+1;while(x<z){*n=*x;*s5=*s4;n+=1;x+=1;s3+=1;s4+=1;}z-=1;s0-=1;continue;
                 };
 
                 f+=1;s5+=1;
