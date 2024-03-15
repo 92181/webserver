@@ -16,5 +16,12 @@ Self-signed certificates can be generated with OpenSSL.
 ```bash
 openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 3560 -nodes -subj '/CN=127.0.0.1'
 ```
+
+Project can be compiled and ran with gcc using this bash command.
+```bash
+gcc main.c -o main
+./main
+```
+
 # License
 This project is part of the public domain, feel free to use it in whatever form you want.
