@@ -1,8 +1,6 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <sys/ioctl.h>
 #include <openssl/ssl.h>
 
 // openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 3560 -nodes -subj '/CN=127.0.0.1'
@@ -14,9 +12,10 @@ static const unsigned char qq[64]={65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,
 tt[256]={65,65,65,65,66,66,66,66,67,67,67,67,68,68,68,68,69,69,69,69,70,70,70,70,71,71,71,71,72,72,72,72,73,73,73,73,74,74,74,74,75,75,75,75,76,76,76,76,77,77,77,77,78,78,78,78,79,79,79,79,80,80,80,80,81,81,81,81,82,82,82,82,83,83,83,83,84,84,84,84,85,85,85,85,86,86,86,86,87,87,87,87,88,88,88,88,89,89,89,89,90,90,90,90,97,97,97,97,98,98,98,98,99,99,99,99,100,100,100,100,101,101,101,101,102,102,102,102,103,103,103,103,104,104,104,104,105,105,105,105,106,106,106,106,107,107,107,107,108,108,108,108,109,109,109,109,110,110,110,110,111,111,111,111,112,112,112,112,113,113,113,113,114,114,114,114,115,115,115,115,116,116,116,116,117,117,117,117,118,118,118,118,119,119,119,119,120,120,120,120,121,121,121,121,122,122,122,122,48,48,48,48,49,49,49,49,50,50,50,50,51,51,51,51,52,52,52,52,53,53,53,53,54,54,54,54,55,55,55,55,56,56,56,56,57,57,57,57,43,43,43,43,47,47,47},
 yy[256]={65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,48,49,50,51,52,53,54,55,56,57,43,47,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,48,49,50,51,52,53,54,55,56,57,43,47,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,48,49,50,51,52,53,54,55,56,57,43,47,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,48,49,50,51,52,53,54,55,56,57,43};
 
-unsigned char r[125]="HTTP/1.1 101 Switching Protocols\nupgrade: websocket\nConnection: upgrade\nSec-WebSocket-Accept: 0000000000000000000000000000\n\n",v[36]="258EAFA5-E914-47DA-95CA-C5AB0DC85B11",a[65600],*yt,*iy,*i5,ir,i6,i7,i8,*i9,*io,*ip,*ia,*ix,*iq,*t,*o=a+576,hash[21];
+unsigned char r[]="HTTP/1.1 101 Switching Protocols\nupgrade: websocket\nConnection: upgrade\nSec-WebSocket-Accept: 0000000000000000000000000000\r\n\r\n",v[36]="258EAFA5-E914-47DA-95CA-C5AB0DC85B11",a[65600],*yt,*iy,*i5,ir,i6,i7,i8,*i9,*io,*ip,*ia,*ix,*iq,*t,*o=a+576,hash[21];
 
-unsigned char h0[]="HTTP/3\r\n\n<!DOCTYPE html><html><head><title>Redirect</title><link rel='icon' href='data:,'></head><body><script>s=new WebSocket('wss://127.0.0.1:3000');s.onopen=function(){console.log('Open.');s.send('Hello!');setTimeout(function(){s.close();console.log('Closing.')},8000)};s.onmessage=function(m){console.log('Data received: '+m.data)};</script></body></html>";
+unsigned char h0[]="HTTP/2 200 OK\r\n\n<!doctype html><html><head><title>Redirect</title><link rel='icon' href='data:,'></head><body><script>"
+"s=new WebSocket('wss://127.0.0.1:3000');s.onopen=function(){console.log('Open.');s.send('Hello!');setTimeout(function(){s.close();console.log('Closing.')},8000)};s.onmessage=function(m){console.log('Data received: '+m.data)};</script></body></html>\r\n";
 
 #define rol(value, bits) (((value) << (bits)) | ((value) >> (32 - (bits))))
 #define blk0(i) (sj[i] = (rol(sj[i],24)&4278255360U)|(rol(sj[i],8)&16711935))
@@ -40,20 +39,23 @@ void SHA1Transform()
     sa+=a;sb+=b;sc+=c;sd+=d;se+=e;
 };
 
-int main() // Main;
+// Main Logic;
+int main() 
 {
-    unsigned int y,s=socket(2,1,0),l=16;ioctl(s,21537,&l);struct sockaddr_in q;q.sin_family=2;q.sin_addr.s_addr=0;q.sin_port=htons(3000);bind(s,(struct sockaddr*)&q,l);struct sockaddr u;listen(s,1000);
+    // Configure Server To Use IPv6 With Port 3000 & Setup SSL;
+    unsigned int y,s=socket(10,2049,0),l=28,q[7],u[7];*q=((3000>>8|3000<<8)&65535)<<16|10;bind(s,(struct sockaddr*)&q,l);listen(s,1000);
     const SSL_METHOD *method=TLS_server_method();SSL_CTX *ctx=SSL_CTX_new(method);SSL_CTX_use_certificate_file(ctx,"cert.pem",1);SSL_CTX_use_PrivateKey_file(ctx,"key.pem",1);
 
     while(1)
     {
-        y=accept(s,&u,&l);
+        y=accept(s,(struct sockaddr*)&u,&l);
 
         if(y>>31==0)
         {
             s2=SSL_new(ctx);SSL_set_fd(s2,y);SSL_accept(s2);SSL_read(s2,a,576);
 
-            t=a;do // Initial WebSocket handshake;
+            // Initial WebSocket Handshake;
+            t=a;do
             {
                 if(*t==101)
                 {
@@ -67,7 +69,7 @@ int main() // Main;
                         i0=sd>>24,i1=sd>>16,i2=sd>>8;*(r+110)=tt[i0];*(r+111)=qq[i1>>4|(i0&3)<<4];*(r+112)=qq[i2>>6|(i1&15)<<2];*(r+113)=yy[i2];i0=sd,i1=se>>24,i2=se>>16;*(r+114)=tt[i0];*(r+115)=qq[i1>>4|(i0&3)<<4];*(r+116)=qq[i2>>6|(i1&15)<<2];*(r+117)=yy[i2];
                         i0=se>>8,i1=se;*(r+118)=tt[i0];*(r+119)=qq[i1>>4|(i0&3)<<4];*(r+120)=qq[(i1&15)<<2];*(r+121)=61;
                         
-                        SSL_write(s2,r,125);ioctl(y,21537,&l);*z=y;z+=1;*s0=s2;s0+=1;break;
+                        SSL_write(s2,r,127);*z=y;z+=1;*s0=s2;s0+=1;break;
                     };
                 };
 
@@ -75,18 +77,21 @@ int main() // Main;
             }
             while(t<o);
 
-            if(t==o) // Initial HTTP get;
+            // Initial HTTP Get;
+            if(t==o)
             {
-                SSL_write(s2,h0,360);SSL_shutdown(s2);SSL_free(s2);close(y);
+                SSL_write(s2,h0,844);SSL_shutdown(s2);SSL_free(s2);close(y);
             };
         }
-        else // WebSocket proccess;
+        else
         {
+            // WebSocket Proccess;
             while(f<z)
             {
-                t0=SSL_read(*s5,a,65600);if(t0>0) // Handle received data;
+                t0=SSL_read(*s5,a,65600);if(t0>0)
                 {
-                    if(*a==136) // Handle WebSocket disconnect;
+                    // Handle WebSocket Disconnect;
+                    if(*a==136)
                     {
                         SSL_shutdown(*s5);SSL_free(*s5);close(*f);n=f;x=f+1;s3=s5;s4=s5+1;while(x<z){*n=*x;*s5=*s4;n+=1;x+=1;s3+=1;s4+=1;}z-=1;s0-=1;continue;
                     };
@@ -94,9 +99,10 @@ int main() // Main;
                     i5=a+2;i4=*(a+1)&127;if(i4>125){if(i4==126){i4=*(a+2)|*(a+3)<<8;i5+=2;}else{i4=65536;i5+=7;};};ir=*i5;i6=*(i5+1);i7=*(i5+2);i8=*(i5+3);ix=iq=i5+4;i9=ix+i4;io=ix+1;ip=io+1;ia=ip+1;
                     do{*ix=*ix^ir;*io=*io^i6;*ip=*ip^i7;*ia=*ia^i8;ix+=4;io+=4;ip+=4;ia+=4;}while(ix<i9);
                     
-                    unsigned char *i=iq;while(i<i9){printf("%c",*i);i+=1;};printf("\n"); // Print received data;
+                    // Print Received Data;
+                    unsigned char *i=iq;while(i<i9){printf("%c",*i);i+=1;};printf("\n");
                 }
-                else if(t0==0) // Handle TCP disconnect;
+                else if(t0==0) // Handle TCP Disconnect;
                 {
                     SSL_shutdown(*s5);SSL_free(*s5);close(*f);n=f;x=f+1;s3=s5;s4=s5+1;while(x<z){*n=*x;*s5=*s4;n+=1;x+=1;s3+=1;s4+=1;}z-=1;s0-=1;continue;
                 };
