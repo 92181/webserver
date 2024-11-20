@@ -1,4 +1,6 @@
 # Simplistic C Web Server
+**WIP AGAIN - 2024**
+
 Performant and minimal web server, capable of providing full-duplex communication via WS. This web server template has built-in support for the WebSocket protocol. This small server depends on the OpenSSL library, it also uses some native system libraries, wich are included by default on linux. 
 It is single-threaded and capable of handling both IPv4 & Ipv6 connections. 
 
