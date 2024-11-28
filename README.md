@@ -26,4 +26,4 @@ gcc main.c -o main
 ```
 
 # License
-This project is part of the public domain, feel free to use it in whatever form you want.
+MIT
