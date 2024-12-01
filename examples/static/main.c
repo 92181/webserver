@@ -63,12 +63,10 @@ static inline void trd(char *g,unsigned int b)
         lr=g;gu=gi;while(lr<ty&&*lr==*gu){lr+=1;gu+=1;}unsigned int hj;if(lr==ty){hj=tu-cd-b-10;ty-=10;if(hj!=0){hj-=1;ty-=1;};}else{hj=tu-cd-b;};
 
         // Increase Size Of Content Buffer If It Does Not Fit;
-        unsigned char *r=t+sizeof(int)*2+(hj+s);if(r>j){unsigned int x=r-u+1024*1024;t=u=realloc(u,x);j=u+x;r=t+sizeof(int)*2+(hj+s);};
+        unsigned char *r=t+sizeof(int)*2+(hj+s);if(r>j){unsigned char *l=u;unsigned int x=r-u+1024*1024;u=realloc(u,x);t=u+(t-l);j=u+x;};
 
         // Write Size Of Name And Content, Then Write Name And File Content To Buffer;
-        *(unsigned int*)t=hj;*(unsigned int*)(t+sizeof(int))=s;t+=sizeof(int)*2;lr=cd+b;while(lr<ty){*t=*lr;t+=1;lr+=1;};read(f,t,s);close(f);
-
-        t=r;
+        *(unsigned int*)t=hj;*(unsigned int*)(t+sizeof(int))=s;t+=sizeof(int)*2;lr=cd+b;while(lr<ty){*t=*lr;t+=1;lr+=1;};read(f,t,s);close(f);t+=s;
       };
     };
 
