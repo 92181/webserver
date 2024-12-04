@@ -73,8 +73,8 @@ static inline void trd(char *g,unsigned int b)
     closedir(dr);
   };
 
-  // Allocate And Fill Hash Table With Zero's; // gj*16
-  gl=gj*4;gh=sf=malloc(gl*sizeof(char*));se=gh+gl;while(sf<se){*sf=0;sf+=1;};unsigned char *gr=u;
+  // Allocate And Fill Hash Table With Zero's;
+  gl=gj*16;gh=sf=malloc(gl*sizeof(char*));se=gh+gl;while(sf<se){*sf=0;sf+=1;};unsigned char *gr=u;
 
   while(gr<t)
   {
