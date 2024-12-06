@@ -23,7 +23,7 @@ static inline void router(SSL *q)
     // Write Response To Client;
     if(vy==vw)
     {
-      SSL_write(q,"HTTP/2 200 OK\r\n\n<!doctype><html>Homepage!</html>\r\n",49);
+      SSL_write(q,"Hello World;",12);
     }
     else if(*vy=='n')
     {
