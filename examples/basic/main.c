@@ -33,7 +33,7 @@ static inline void router(SSL *q)
     {
       SSL_write(q,"HTTP/2 200 OK\r\n\n<!doctype><html>This Is Yet Another Page.</html>\r\n",66);
     };
-  }
+  };
 };
 
 // Main Logic;
