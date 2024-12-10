@@ -31,4 +31,4 @@ gcc main.c -o main -O3 -lssl -lcrypto
 # About & Licensing
 This project is licensed under the permissive MIT license. Please consider starring the project if you like it.
 
-This project originally used to contain a WebSocket implementation, however it was removed when I decided to reprogram a part of the library. You can know find it in the archive folder.
+This project originally used to contain a WebSocket implementation, however it was removed when I decided to reprogram a part of the library. You can now find it in the archive folder.
