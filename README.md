@@ -15,7 +15,7 @@ It contains two examples...
 
 # Usage
 The server makes uses of non-blocking sockets to continuously check for incoming connections. 
-There are multiple sections, the WebSocket handshake and initial HTTPS requests are grouped together, this server also loops through all previously connected sockets, to check for any transferred data and to reply.
+There are multiple sections to the code, such as certificate handling, serving, threading, etc.
 
 Self-signed certificates can be generated with OpenSSL.
 ```bash
