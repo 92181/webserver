@@ -12,6 +12,9 @@ unsigned char *b,*c,*qw=(unsigned char*)"\033[31mMemory Allocation Failure!\033[
 
 unsigned int i[4],s,a,f;char vq[16384],*vz,*vw,*vy,*gi="index.html",*gu;
 
+// String Length Function;
+static inline unsigned long int srl(char *p){char *i=p;while(*p!=0){p+=1;};return p-i;};
+
 // Hash Bytes Using FNV Hashing Algorithm;
 static inline unsigned int fnv(char *i,char *u)
 {
@@ -43,7 +46,7 @@ static inline void trd(char *g,unsigned int b)
     while((en=readdir(dr))!=0)
     {
       // Get Name And Skip Hidden Files;
-      char *v=en->d_name,*tu=g,*ty=tu+en->d_namlen,*lr;if(*v=='.'){continue;};
+      char *v=en->d_name,*tu=g,*ty=tu+srl(v),*lr;if(*v=='.'){continue;};
 
       // Write Extension Of Path;
       while(tu<ty){*tu=*v;v+=1;tu+=1;};*tu=0;
