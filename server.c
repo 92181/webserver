@@ -44,7 +44,7 @@ static inline void insrv(unsigned int *z,unsigned short p,void (*fc)(SSL*),unsig
     *(unsigned int*)(q+8)=*z;*(unsigned int*)(q+12)=*(z+1);*(unsigned int*)(q+16)=*(z+2);*(unsigned int*)(q+20)=*(z+3);bind(ns,(struct sockaddr*)&q,nl);listen(ns,10000);
 
     // Query Max Amount Of Threads On CPU;
-    nt=sysconf(58);ny=malloc(nt*sizeof(int));unsigned int i=0,*x=ny;nu=malloc(nt*sizeof(pthread_t));
+    nt=sysconf(_SC_NPROCESSORS_ONLN);ny=malloc(nt*sizeof(int));unsigned int i=0,*x=ny;nu=malloc(nt*sizeof(pthread_t));
 
     // Set ID And Create Thread For Each;
     while(i<nt){*x=i;pthread_create(&nu[i],0,thsrv,x);i+=1;x+=1;};
