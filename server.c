@@ -15,7 +15,7 @@ static inline void *thsrv(void *j)
     // Process Incoming Data;
     while(1)
     {
-        y=accept(ns,(struct sockaddr*)&u,&nl);if(y<0){continue;}
+        y=accept(ns,(struct sockaddr*)&u,&nl);
 
         if(y>>31==0)
         {
