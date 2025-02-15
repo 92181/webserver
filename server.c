@@ -29,6 +29,8 @@ static inline void *thsrv(void *j)
     return 0;
 };
 
+#include <arpa/inet.h>
+
 // Start Server;
 static inline void insrv(unsigned int *z,unsigned short p,void (*fc)(SSL*),unsigned char *b,unsigned int s,unsigned char *c,unsigned int a)
 {
@@ -36,12 +38,29 @@ static inline void insrv(unsigned int *z,unsigned short p,void (*fc)(SSL*),unsig
     fu=fc;ctx=SSL_CTX_new(TLS_server_method());
 
     // Parse Certificates And Load The Certificates Into The OpenSSL Context;
-    BIO *crt=BIO_new_mem_buf(b,s),*kye=BIO_new_mem_buf(c,a);X509 *cert=PEM_read_bio_X509(crt,0,0,0);EVP_PKEY *key=PEM_read_bio_PrivateKey(kye,0,0,0);free(crt);free(kye);
-    SSL_CTX_use_certificate(ctx,cert);SSL_CTX_use_PrivateKey(ctx,key);EVP_PKEY_free(key);X509_free(cert);
+    BIO *crt=BIO_new_mem_buf(b,s),*kye=BIO_new_mem_buf(c,a);X509 *cert=PEM_read_bio_X509(crt,0,0,0);EVP_PKEY *key=PEM_read_bio_PrivateKey(kye,0,0,0);
+
+    free(crt);
+    free(kye);
+
+    SSL_CTX_use_certificate(ctx,cert);
+    SSL_CTX_use_PrivateKey(ctx,key);
+
+    EVP_PKEY_free(key);
+    X509_free(cert);
 
     // Set Port And IP Then Bind And Listen;
-    ns=socket(AF_INET6,SOCK_STREAM,0);unsigned char q[28];*(q+1)=AF_INET6;*(unsigned short*)(q+2)=(p>>8|p<<8)&65535;
-    *(unsigned int*)(q+8)=*z;*(unsigned int*)(q+12)=*(z+1);*(unsigned int*)(q+16)=*(z+2);*(unsigned int*)(q+20)=*(z+3);bind(ns,(struct sockaddr*)&q,nl);listen(ns,10000);
+    struct sockaddr_in6 q;ns=socket(AF_INET6,SOCK_STREAM,0);q.sin6_family = AF_INET6;
+
+    q.sin6_addr.__in6_u.__u6_addr32[0]=*z;
+    q.sin6_addr.__in6_u.__u6_addr32[1]=*(z+1);
+    q.sin6_addr.__in6_u.__u6_addr32[2]=*(z+2);
+    q.sin6_addr.__in6_u.__u6_addr32[3]=*(z+3);
+
+    q.sin6_port=(p>>8|p<<8)&65535;
+    
+    bind(ns,(struct sockaddr*)&q,nl);
+    listen(ns,10000);
 
     // Query Max Amount Of Threads On CPU;
     nt=sysconf(_SC_NPROCESSORS_ONLN);ny=malloc(nt*sizeof(int));unsigned int i=0,*x=ny;nu=malloc(nt*sizeof(pthread_t));
