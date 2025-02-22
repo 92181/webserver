@@ -52,10 +52,12 @@ static inline void insrv(unsigned int *z,unsigned short p,void (*fc)(SSL*),unsig
     // Set Port And IP Then Bind And Listen;
     struct sockaddr_in6 q;ns=socket(AF_INET6,SOCK_STREAM,0);q.sin6_family = AF_INET6;
 
-    q.sin6_addr.__in6_u.__u6_addr32[0]=*z;
-    q.sin6_addr.__in6_u.__u6_addr32[1]=*(z+1);
-    q.sin6_addr.__in6_u.__u6_addr32[2]=*(z+2);
-    q.sin6_addr.__in6_u.__u6_addr32[3]=*(z+3);
+    unsigned int *pt=(unsigned int*)&q.sin6_addr;
+
+    *pt=*z;
+    *(pt+1)=*(z+1);
+    *(pt+2)=*(z+2);
+    *(pt+3)=*(z+3);
 
     q.sin6_port=(p>>8|p<<8)&65535;
     
