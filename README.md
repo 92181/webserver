@@ -1,5 +1,5 @@
 # WpXI - Simple & Fast HTTPS Server
-Performant and minimal web server, capable of being used simply and also highly extensible. This small web server library depends on OpenSSL, it also uses some native system libraries, wich are included by default on Linux and MacOS. 
+Performant and minimal web server, capable of being used simply and also highly extensible. This small web server library depends on OpenSSL, it also uses some native system libraries, which are included by default on Linux and MacOS. 
 It serves all of it's files in a multi-threaded way and is capable of handling both IPv4 & Ipv6 connections. 
 
 It was written because I was frustated by the lack of functionality of `python3 -m http.server` and wanted a 'drop in' replacement which was highly extensible, written in C and which you can modify as you see fit.
