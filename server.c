@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <openssl/ssl.h>
+#include <arpa/inet.h>
 #include <pthread.h>
 
 // Define Safe Globals;
@@ -29,9 +30,7 @@ static inline void *thsrv(void *j)
     return 0;
 };
 
-#include <arpa/inet.h>
-
-// Start Server;
+// Start Server (IP, Port, Router Function, Certificate Variables);
 static inline void insrv(unsigned int *z,unsigned short p,void (*fc)(SSL*),unsigned char *b,unsigned int s,unsigned char *c,unsigned int a)
 {
     // Create SSL Method And Context;
