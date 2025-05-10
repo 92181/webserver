@@ -39,8 +39,7 @@ static inline void insrv(unsigned int *z,unsigned short p,void (*fc)(SSL*),unsig
     // Parse Certificates And Load The Certificates Into The OpenSSL Context;
     BIO *crt=BIO_new_mem_buf(b,s),*kye=BIO_new_mem_buf(c,a);X509 *cert=PEM_read_bio_X509(crt,0,0,0);EVP_PKEY *key=PEM_read_bio_PrivateKey(kye,0,0,0);
 
-    free(crt);
-    free(kye);
+    free(crt);free(kye);
 
     SSL_CTX_use_certificate(ctx,cert);
     SSL_CTX_use_PrivateKey(ctx,key);
