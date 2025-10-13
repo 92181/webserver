@@ -1,4 +1,7 @@
 # WpXI - Simple & Fast HTTPS Server
+
+> Rewrite in process to support Epolling
+
 Performant and minimal web server, capable of being used simply and also highly extensible. This small web server library depends on OpenSSL, it also uses some native system libraries, which are included by default on Linux and MacOS. 
 It serves all of it's files in a multi-threaded way and is capable of handling both IPv4 & IPv6 connections. 
 
