@@ -17,7 +17,11 @@
   #include <poll.h>
 #endif
 
-#define MAV 256
+#if defined(__BSD__) && defined(SO_REUSEPORT_LB)
+  #undef SO_REUSEPORT
+  #define SO_REUSEPORT SO_REUSEPORT_LB
+#endif
+
 #define THREAD_CLIENTS 65536
 #define THREAD_CONC_CLIENTS 2048
 #define PACKET_SIZE 16384
@@ -35,28 +39,42 @@
 // 
 
 // Define Globals (Sockets, Queue, SSL, Socket Struct);
-unsigned int ns,nr,nt;pthread_t *nu;SSL_CTX *ssl;X509 *cert;EVP_PKEY *key;
+unsigned int nr,nt;pthread_t *nu;SSL_CTX *ssl;X509 *cert;EVP_PKEY *key;
 
 typedef struct ux
 {
-  int fd;
+  int fd,wr;
   SSL *ssl;
-  unsigned int wr;
+  //unsigned int wr;
   void *d;
 
   #if __linux__
   struct io_uring *r;
+  #else
+  int kq;
   #endif
 } ud;
+
+typedef struct
+{
+  int s;
+
+  #if __linux__
+  struct io_uring *r;
+  void *b,*i;
+  #else
+  int kq;
+  #endif
+} td;
 
 //void (*recv_func)(ud*,void*,int);void(*drain_func)(ud*);void(*close_func)(ud*);
 void (*recv_func)(ud*,void*,int),(*drain_func)(ud*),(*close_func)(ud*);
 
-_Atomic (ud*)sz;ud *sl;
+_Atomic (ud*)sz;ud *sl;td *ti;
 
 // Define Queue & IO Functions, Variables;
 #ifndef __linux__
-struct kevent kl;unsigned int ep;
+//int to=0;
 
 static void server_send(ud *x,const void *b,unsigned int l) 
 {
@@ -66,7 +84,7 @@ static void server_send(ud *x,const void *b,unsigned int l)
   {
     if(SSL_get_error(x->ssl,u)!=SSL_ERROR_WANT_WRITE)
     {
-      close_socket(x);return;
+      x->wr=-1;return;
     };
 
     u=0;
@@ -74,22 +92,13 @@ static void server_send(ud *x,const void *b,unsigned int l)
 
   if(l-u>0&&x->wr==0)
   {
-    struct kevent k;EV_SET(&k,x->fd,EVFILT_WRITE,EV_ADD|EV_ONESHOT,0,0,x);x->wr=l-u;printf("Partial Send: %d/%d\n",u,l);
+    struct kevent k;EV_SET(&k,x->fd,EVFILT_WRITE,EV_ADD|EV_ONESHOT,0,0,x);x->wr=l-u;
 
-    if(kevent(ep,&k,1,0,0,0)<0)
-    {
-      close_socket(x);
-    };
+    kevent(x->kq,&k,1,0,0,0);printf("Partial Send: %d/%d\n",u,l);
   };
 };
 #else
 const unsigned long tm=15UL<<60,am=(~tm);
-
-typedef struct
-{
-  void *b,*i;
-  struct io_uring *r;
-} td;
 
 static inline void reg_accept(struct io_uring *r,int s)
 {
@@ -119,20 +128,6 @@ static void server_send(ud *s,const void *b,unsigned int l)
 
   io_uring_sqe_set_data64(e,((unsigned long)s|2UL<<60));
   io_uring_submit(s->r);
-};
-
-// Cleanup Thread;
-static void free_thread(void *s)
-{
-  #if __linux__
-  /*td *t=(td*)s; // cast
-
-  io_uring_unregister_buf_ring(t->r,0);free(t->i);
-
-  io_uring_queue_exit(t->r);free(t->b);*/
-
-  td t=*(td*)s;io_uring_unregister_buf_ring(t.r,0);free(t.i);io_uring_queue_exit(t.r);free(t.b);
-  #endif
 };
 #endif
 
@@ -191,11 +186,16 @@ static int load_cert(const char *i,const char *z)
 static int setup_sock(unsigned int *z,unsigned short p)
 {
   #if __APPLE__
-  int s=socket(AF_INET6,SOCK_STREAM,0);fcntl(s,F_SETFL,O_NONBLOCK);
+  int s=socket(AF_INET6,SOCK_STREAM,0),o=1;fcntl(s,F_SETFL,O_NONBLOCK);
   #else
-  int s=socket(AF_INET6,SOCK_STREAM|SOCK_NONBLOCK,0);
+  int s=socket(AF_INET6,SOCK_STREAM|SOCK_NONBLOCK,0),o=1;
   #endif
-  
+
+  if(setsockopt(s,SOL_SOCKET,SO_REUSEPORT,&o,sizeof(o))!=0)
+  {
+    return 0;
+  };
+
   struct sockaddr_in6 q;q.sin6_family=AF_INET6;q.sin6_port=(p>>8|p<<8)&65535;
 
   // Set IP (IPv6);
@@ -212,26 +212,24 @@ static int setup_sock(unsigned int *z,unsigned short p)
 };
 
 // Close Socket;
-static inline void close_socket(ud *s)
+static inline void close_socket(ud *x)
 {
-  printf("Start Close: %d\n",s->fd);
-  if(s->ssl!=0)
-  {
-    SSL_shutdown(s->ssl);SSL_free(s->ssl);
+  printf("Start Close: %d\n",x->fd);close(x->fd);
 
-    /*#ifndef __linux__
-    s->ssl=0;
-    #endif*/
+  if(x->ssl!=0)
+  {
+    SSL_free(x->ssl);x->ssl=0;
   };
 
-  if((long)s->d>2)
+  if((long)x->d>2)
   {
-    close_func(s);
+    close_func(x);
   };
+  
 
-  //s->d=0;close(s->fd);s->next=atomic_load(&sz);atomic_store(&sz,s);printf("Closed: %d\n",s->fd);
-  //s->d=0;close(s->fd);s->d=atomic_load(&sz);atomic_store(&sz,s);printf("Closed: %d\n",s->fd);
-  s->d=0;close(s->fd);s->d=atomic_exchange(&sz,s);printf("Closed: %d\n",s->fd);
+  x->d=0;printf("Closed: %d\n",x->fd);
+  //x->d=atomic_exchange(&sz,x);
+  free(x);// temp
 };
 
 // Destroy Server;
@@ -241,7 +239,7 @@ static void destroy_server()
 
   while(x<nt)
   {
-    pthread_cancel(*(nu+x));pthread_join(*(nu+x),0);
+    pthread_cancel(*(nu+x));printf("Killing thread %d\n",x);pthread_join(*(nu+x),0);
 
     x+=1;
   };
@@ -258,15 +256,11 @@ static void destroy_server()
     t+=1;
   };
 
-  #ifndef __linux__
-  close(ep);
-  #endif
-
   #if REDIR_HTTP
-  close(nr);
+  //close(nr);
   #endif
 
-  free(sl);close(ns);SSL_CTX_free(ssl);free(nu);
+  free(sl);SSL_CTX_free(ssl);free(nu);free(ti);
 };
 
 // Redirect HTTP Requests;
@@ -283,10 +277,12 @@ static void *http_redirect(void *p)
   // Process Incoming Data;
   while(1)
   {
+    printf("thr\n");
     s=accept(f,(struct sockaddr*)&u,&q);
 
     if(s>>31==0)
     {
+      printf("thr\n");
       // HTTP Redirect;
       char *z=a,*e=a+256;(void)!read(s,a,256);
 
@@ -307,24 +303,71 @@ static void *http_redirect(void *p)
   };
 };
 
+// Cleanup Thread;
+static void free_thread(void *j)
+{
+  td t=*(td*)j;
+
+  close(t.s);printf("Free Thread: %d\n",t.s);
+
+  #if __linux__
+  /*td *t=(td*)j; // cast
+  io_uring_unregister_buf_ring(t->r,0);free(t->i);
+  io_uring_queue_exit(t->r);free(t->b);*/
+
+  io_uring_unregister_buf_ring(t.r,0);free(t.i);io_uring_queue_exit(t.r);free(t.b);
+  #else
+  if(t.kq)
+  {
+    close(t.kq);
+  };
+  #endif
+};
+
 // Server Processing Function;
 static void *thread(void *j)
 {
-  #ifndef __linux__
-  struct kevent e[MAV],z;char q[PACKET_SIZE];struct sockaddr_in6 u;
-  
-  socklen_t y=sizeof(u);int s;
-  #else
-  td n;pthread_cleanup_push(free_thread,(void*)&n);int u,f=0;
-  
-  struct io_uring_cqe *e;ud *x;struct io_uring r;
+  td *t=(td*)j;int f=t->s;pthread_cleanup_push(free_thread,(void*)&t);
 
-  if(io_uring_queue_init_params(MAV,&r,&(struct io_uring_params){})<0) 
+  #ifndef __linux__
+  struct kevent e[THREAD_CONC_CLIENTS],k,z;char q[PACKET_SIZE];ud x={0};struct sockaddr_in6 u;
+  
+  socklen_t y=sizeof(u);int s,r=kqueue();t->kq=r;printf("l->kq: %d\n",r);
+
+  int to=0;
+  // Kqueue For Main Sockets;
+  #if REDIR_HTTP
+  /*EV_SET(&k,f,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,&x); // on each nr socket.
+
+  if(r<0||kevent(r,&k,1,0,0,0)<0)
   {
-    return 0;
+    pthread_exit(0);
   };
 
-  n.r=&r;
+  EV_SET(&k,f,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,&x);*/
+  #endif // remove redirection?
+  // reg_accept(&r,f); even support it, implement io redir, if too hard remove it all together.
+  // best to implement..
+
+  // just move this (below) to accept, for apple check if ==0 for bsd not. ifndef linux >> nested apple
+  EV_SET(&k,f,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,&x);
+
+  if(r<0||kevent(r,&k,1,0,0,0)<0)
+  {
+    pthread_exit(0);
+  };
+
+  // do not move this (below keep here)
+  EV_SET(&k,f,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,&x);
+  #else
+  int u,f=0;struct io_uring_cqe *e;ud *x;struct io_uring r;
+
+  if(io_uring_queue_init_params(THREAD_CONC_CLIENTS,&r,&(struct io_uring_params){})<0)  // add IORING_SETUP_ATTACH_WQ?
+  {
+    pthread_exit(0);
+  };
+
+  t->r=&r;
 
   // Allocate Buffer;
   struct io_uring_buf_ring *br;void *buffer_data; // rename both!
@@ -334,7 +377,7 @@ static void *thread(void *j)
     pthread_exit(0);
   };
 
-  n.b=buffer_data;
+  t->b=buffer_data;
   
   // Allocate Pointer List;
   if(posix_memalign((void**)(&br),4096,THREAD_CONC_CLIENTS*sizeof(struct io_uring_buf))!=0)
@@ -342,7 +385,7 @@ static void *thread(void *j)
     pthread_exit(0);
   };
 
-  n.i=(void*)br;
+  t->i=(void*)br;
 
   // Register & Fill Buffer Ring;
   if(io_uring_register_buf_ring(&r,&(struct io_uring_buf_reg){.ring_addr=(unsigned long)br,.ring_entries=THREAD_CONC_CLIENTS,.bgid=0},0)!=0)
@@ -362,24 +405,22 @@ static void *thread(void *j)
   io_uring_buf_ring_advance(br,THREAD_CONC_CLIENTS);
 
   // Prime;
-  reg_accept(&r,ns);
+  reg_accept(&r,f);
   #endif
 
   // Process Incoming Data;
   while(1)
   {
     #ifndef __linux__
-    int n=kevent(ep,0,0,e,MAV,0),i=0;
+    int n=kevent(r,0,0,e,THREAD_CONC_CLIENTS,0),i=0;
 
     while(i<n)
     {
-      s=e[i].ident;ud *x=(ud*)e[i].udata;
-      printf("Wakeup %d %d %ld %d!\n",s,x->fd,(long)x->d,e[i].filter); // 4 0 1 -1(READ_EVENT) but does not read perhaps so loop? check!
+      s=e[i].ident;ud *x=(ud*)e[i].udata;printf("Wakeup %d %d %ld %d!\n",s,x->fd,(long)x->d,e[i].filter); // 4 0 1 -1(READ_EVENT) but does not read perhaps so loop? check!
 
       if(e[i].flags&(EV_EOF|EV_ERROR))
       {
-        printf("Disconnect!\n");
-        if(s==ns)
+        if(s==f)
         {
           close(s);
         }
@@ -394,25 +435,21 @@ static void *thread(void *j)
         {
           case 0:
           {
-            // Re-activate Main Socket (NS);
-            kevent(ep,&kl,1,0,0,0);
+            // Handle Accept (!Break) & Activate Main (>Accept);
+            //if((((long)j-(long)ti)/sizeof(td))!=0){printf("Faulty\n\n");break;}
+            s=accept(f,(struct sockaddr*)&u,&y);printf("New Client %d %ld\n",s,(long)(((long)j-(long)ti)/sizeof(td))); // log thread
+            // -1 causes crashes, because register is in front of check? then 2 on 1 sock.
+            // tried with 1 socket, does not solve it.
 
-            // Handle Accept (!Break);
-            s=accept(s,(struct sockaddr*)&u,&y);printf("New Client %d\n",s);//if(s<0){exit(0);} // temp // was unsigned int
+            kevent(r,&k,1,0,0,0);
 
             if(s<0||fcntl(s,F_SETFL,O_NONBLOCK)<0)
             {
               break;
             };
 
-            // Store Client Structure (Linked List);
-            /*if(sz==0)
-            {
-              close(s);break;
-            };
-
-            x=atomic_load(&sz);atomic_store(&sz,x->d);//x->d=(char*)1; (moved) // set to 1*/
-            do 
+            // Get Client Buffer (Linked List);
+            /*do 
             {
               x=atomic_load(&sz);
 
@@ -421,63 +458,98 @@ static void *thread(void *j)
                 close(s);goto r;
               };
             }
-            while(!atomic_compare_exchange_weak(&sz,&x,x->d));
+            while(!atomic_compare_exchange_weak(&sz,&x,x->d));*/ // atomics not needed perse.
+            x=calloc(1,sizeof(ud));
 
             // Create SSL Context;
-            x->d=(char*)1;x->ssl=SSL_new(ssl);SSL_set_fd(x->ssl,s);x->fd=s;
+            x->ssl=SSL_new(ssl);SSL_set_fd(x->ssl,s);x->fd=s;
 
+            // Create Event;
             EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,x);
+            /*
+            // was __APPLE__ (now not for testing)
+            #if 1
+            // Distribute Clients (1 Accept, Apple Only); // Causes segm fault...
+            to=(to+1)%nt;x->kq=((td*)ti+to)->kq;
+            //x->kq=13;
+            //to=(to+1)%(nt-1);x->kq=((td*)ti+to)->kq;
+            
+            if(kevent(x->kq,&z,1,0,0,0)<0)
+            #else
+            x->kq=r;
 
-            if(kevent(ep,&z,1,0,0,0)<0)
+            if(kevent(r,&z,1,0,0,0)<0)
+            #endif
             {
-              close(s);x->d=0;break;
-            };
-            printf("Client Done\n");
+              close_socket(x);break;
+            };*/
+
+            // move to below? register when done.
+
+            printf("Client Done %d %d\n",x->kq,s);
           }
           case 1:
           {
-            // SSL Accept (Break Want);
-            int u=SSL_accept(x->ssl);
+            // SSL Accept (Break Error);
+            //printf("SSL Accept Thread: %ld, Sock %d\n",(long)(((long)j-(long)ti)/sizeof(td)),s);
+            int u=SSL_accept(x->ssl);printf("SSL, %d\n",u); // Segmentation on accept.
 
             if(u<=0)
             {
               int e=SSL_get_error(x->ssl,u);
 
-              if(e!=SSL_ERROR_WANT_READ&&e!=SSL_ERROR_WANT_WRITE)
+              if(e==SSL_ERROR_WANT_READ||e==SSL_ERROR_WANT_WRITE)
               {
-                close_socket(x);break;
-              };
+                // Re-activate Read Listener;
+                if(x->d==(char*)1)
+                {
+                  EV_SET(&z,s,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,x);
 
-              // Re-activate Read Listener;
-              EV_SET(&z,s,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,x);
-
-              if(kevent(ep,&z,1,0,0,0)<0)
+                  if(kevent(x->kq,&z,1,0,0,0)<0)
+                  {
+                    close_socket(x);printf("Failure\n");exit(0);
+                  };
+                }
+                else // NEW
+                {
+                  to=(to+1)%nt;x->kq=((td*)ti+to)->kq; // ifdef apple
+                  x->d=(char*)1;
+                  if(kevent(x->kq,&z,1,0,0,0)<0)
+                  {
+                    close_socket(x);printf("Failure\n");exit(0);
+                  };
+                }
+              }
+              else
               {
                 close_socket(x);
               };
 
-              break;
+              x->d=(char*)1;break;
             }
             else
             {
-              x->d=(char*)2;
+              x->d=(char*)2;printf("SSL Done %d\n",s);
             };
           }
           default:
           {
-            // Read;
-            int u=SSL_read(x->ssl,q,PACKET_SIZE);
+            int u=SSL_read(x->ssl,q,PACKET_SIZE);printf("Read %d\n",u);
 
+            // Register Listener;
             EV_SET(&z,s,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,x);
 
-            if(kevent(ep,&z,1,0,0,0)<0)
+            if(kevent(x->kq,&z,1,0,0,0)<0)
             {
               close_socket(x);break;
             };
 
             if(u>0)
             {
-              recv_func(x,q,u);
+              // Process;
+              //recv_func(x,q,u);
+              const char h[]="HTTP/1.1 200\r\n\r\nHello World";server_send(x,h,sizeof(h)-1);
+              printf("Send Done\n");close_socket(x);break;
             };
 
             break;
@@ -526,7 +598,7 @@ static void *thread(void *j)
         // Handle Accept (!Break);
         if(x==0)
         {
-          reg_accept(&r,ns);
+          reg_accept(&r,f);
 
           // Get Client Structure (Thread, Linked List);
           if(sz==0||fcntl(u,F_SETFL,O_NONBLOCK)<0)
@@ -627,9 +699,7 @@ static void *thread(void *j)
     #endif
   };
 
-  #if __linux__
   pthread_cleanup_pop(1);
-  #endif
 };
 
 // Start Server;
@@ -674,24 +744,10 @@ static inline int start_server(unsigned int *z,unsigned short p,void(*v)(ud*,voi
 
   sz=sl;
 
-  // Setup Socket;
-  ns=setup_sock(z,p);
-
-  #if REDIR_HTTP
-  nr=setup_sock(z,80);fcntl(nr,F_SETFL,0);
-
-  // Calculate Ratio Between Threads, (/16);
-  unsigned int ni=i/16;
-
-  while(nt<ni)
-  {
-    pthread_create(&nu[nt],0,http_redirect,(char*)(long)nr);nt+=1;
-  };
-  #endif
-
   // Setup Event Queues;
-  #ifndef __linux__
-  ep=kqueue();
+  #if __APPLE__
+  //int ns=setup_sock(z,p);
+  /*ep=kqueue();
   
   ud x={0};EV_SET(&kl,ns,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,&x);
 
@@ -700,16 +756,31 @@ static inline int start_server(unsigned int *z,unsigned short p,void(*v)(ud*,voi
     destroy_server();return 1; // not ok..
   };
 
-  EV_SET(&kl,ns,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,&x);
+  EV_SET(&kl,ns,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,&x);*/
   #endif
 
-  // Use All Threads On CPU;
-  char *j=0;
+  ti=malloc(i*sizeof(td));td *q=ti;
 
+  // Spawn Virtual Threads (As Many As Physical);
   while(nt<i)
   {
-    pthread_create(&nu[nt],0,thread,j+nt);nt+=1;
+    q->s=setup_sock(z,p);pthread_create(&nu[nt],0,thread,q);
+    
+    nt+=1;q+=1;
   };
+
+  // Setup Redirection;
+  /*#if REDIR_HTTP
+  nr=setup_sock(z,80);fcntl(nr,F_SETFL,0);
+
+  // Calculate Ratio Between Threads, (/16);
+  unsigned int ni=i/16;//char *j=0;
+
+  while(nt<ni)
+  {
+    pthread_create(&nu[nt],0,http_redirect,(char*)(long)nr);nt+=1;
+  };
+  #endif*/
 
   // Ignore Broken Pipe;
   signal(SIGPIPE,SIG_IGN);

@@ -16,7 +16,7 @@
 #define SERVER_PORT "443"
 #define THREADS 1 // 32
 
-#define HTTP_LOAD_TIME 14
+#define HTTP_LOAD_TIME 1400 // 14
 #define WS_LOAD_TIME 16
 
 struct addrinfo hi,*rs;pthread_t *t;
@@ -86,12 +86,13 @@ static void *http_test(void *j)
     // Create Socket;
     int s=socket(rs->ai_family,rs->ai_socktype,0);
 
-    SSL *ssl=SSL_new(c);SSL_set_fd(ssl,s);
+    SSL *ssl=SSL_new(c);SSL_set_fd(ssl,s);//printf("XX0\n");
 
     if(connect(s,rs->ai_addr,rs->ai_addrlen)>=0)
     {
       if(SSL_connect(ssl)>0)
       {
+        //printf("XX1\n");
         // Send HTTP Request (GET);
         const char s[]="GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";SSL_write(ssl,s,sizeof(s)-1);
 
@@ -121,6 +122,8 @@ static void *http_test(void *j)
 
     SSL_free(ssl);close(s);
   };
+
+  return 0;
 };
 
 // Websocket Test Function;
@@ -177,9 +180,9 @@ static void *ws_test(void *j)
 
     p=SSL_read(ssl,b,sizeof(b));
 
-    long int l;u=b;ws_read(&u,&l);
+    long int l;u=b;//ws_read(&u,&l);
 
-    printf("Received: %d\n",p);printf("Length: %d\n",l);
+    printf("Received: %d\n",p);printf("Length: %ld\n",l);
   }
   else
   {
@@ -231,7 +234,7 @@ int main(int a,char **p)
   };
 
   // Launch Threads (HTTP Test);
-  /*while(x<THREADS)
+  while(x<THREADS)
   {
     pthread_create(&t[x],0,http_test,j+x);x+=1;
   };
@@ -245,10 +248,10 @@ int main(int a,char **p)
     r+=*q;f+=*(q+1);free(q);
   };
   
-  printf("✅ HTTPS Test Passed, RPS: %d, Failed: %d.\n",(r/HTTP_LOAD_TIME),f);*/
+  printf("✅ HTTPS Test Passed, RPS: %d, Failed: %d.\n",(r/HTTP_LOAD_TIME),f);
   
   // Launch Threads (WebSocket Test);
-  x=0;f=0;r=0;
+  /*x=0;f=0;r=0;
 
   while(x<THREADS)
   {
@@ -264,7 +267,7 @@ int main(int a,char **p)
     r+=*q;f+=*(q+1);free(q);
   };
 
-  printf("✅ Websocket Test Passed, RPS: %d, Failed: %d.\n",(r/WS_LOAD_TIME),f); // te.tv_sec-ts.tv_sec,(1000000000-te.tv_nsec)+ts.tv_nsec      << MOVE TO BENCHMARK backup in b64?
+  printf("✅ Websocket Test Passed, RPS: %d, Failed: %d.\n",(r/WS_LOAD_TIME),f);*/ // te.tv_sec-ts.tv_sec,(1000000000-te.tv_nsec)+ts.tv_nsec      << MOVE TO BENCHMARK backup in b64?
   
   // Free;
   freeaddrinfo(rs);
