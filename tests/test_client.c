@@ -14,7 +14,7 @@
 
 #define SERVER_IP "::1"
 #define SERVER_PORT "443"
-#define THREADS 1 // 32
+#define THREADS 32 // 1
 
 #define HTTP_LOAD_TIME 1400 // 14
 #define WS_LOAD_TIME 16

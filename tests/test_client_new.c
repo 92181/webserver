@@ -12,8 +12,8 @@
 
 #define SERVER_IP "::1"
 #define SERVER_PORT "443"
-#define THREAD_CONNECTIONS 1 // 32
 
+#define THREAD_CONNECTIONS 12
 #define HTTP_LOAD_TIME 14
 #define WS_LOAD_TIME 16
 
@@ -28,6 +28,13 @@ const char d[]="HTTP/1.1 200\r\nContent-Length: 1597\r\n\r\nGerman Car Fabricati
   "2000s - BlueTEC diesel (Mercedes), aluminium A2 (Audi), and plug-in hybrids (VW Golf, BMW i3/i8) push efficiency.  2016 - VW's ID. Series announces a full electric shift; the MEB platform underpins the ID.3/ID.4.\n"
   "2021-2025 - Electrification dominates: 70% of VW Group sales are electric, solid-state batteries give 500 km range in 15 min.  Mercedes's autonomous S-Class Vision EQ, Audi's e-tronic quattro, and BMW's iX M showcase AI, Lidar, and carbon-fiber monocoques.  Factories run on cobots and digital twins, producing a customized vehicle every 12 hours.\n"
   "From the humble Velo to autonomous electric sedans, German carmaking has continuously fused performance, precision, and sustainability.";
+
+// Client WS Helper Function;
+static void ws_client_set()
+{
+
+  // fix ws tester client_send (add mask 18,52,86,120) (14 bytes total) (tester only)
+};
 
 // Processing Function;
 static void *thread(void *j)
@@ -67,17 +74,16 @@ static void *thread(void *j)
 
   // test first before moving!
 
-  int s=socket(rs->ai_family,rs->ai_socktype,rs->ai_protocol);
-  fcntl(s,F_SETFL,O_NONBLOCK);
-  connect(s,rs->ai_addr,rs->ai_addrlen); // Will likely return EINPROGRESS
+  int f=socket(rs->ai_family,rs->ai_socktype,rs->ai_protocol);fcntl(f,F_SETFL,O_NONBLOCK);
 
-  SSL *ssl = SSL_new(ctx);
-  SSL_set_fd(ssl, s);
+  connect(f,rs->ai_addr,rs->ai_addrlen); // Will likely return EINPROGRESS
+
+  SSL *ssl = SSL_new(ctx);SSL_set_fd(ssl, f);
   //SSL_set_tlsext_host_name(ssl, hostname);
 
 
   // Initially, we want to know when the socket is writable to start the handshake
-  EV_SET(&change, s, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
+  EV_SET(&change, f, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
   kevent(kq, &change, 1, NULL, 0, NULL);
 
   printf("Starting event loop...\n");
@@ -90,8 +96,9 @@ static void *thread(void *j)
 
     // check time here 
     // if http time done ELSE ws
+    int s=event.ident;
 
-    if (event.ident == s) 
+    if (s == f) 
     {
       if (!connected) 
       {
@@ -102,24 +109,21 @@ static void *thread(void *j)
           printf("SSL Connection Established!\n");
           connected = 1;
           
-          // Now send a simple HTTP request
-          const char *req = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
-          SSL_write(ssl, req, strlen(req));
-          
-          // Switch kqueue to monitor READ for the response
-          EV_SET(&change, s, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+          const char t[]="GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";SSL_write(ssl,t,sizeof(t)-1);
+                    
+          EV_SET(&change, f, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
           kevent(kq, &change, 1, NULL, 0, NULL);
-          EV_SET(&change, s, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+          EV_SET(&change, f, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
           kevent(kq, &change, 1, NULL, 0, NULL);
         } 
         else 
         {
           int err = SSL_get_error(ssl, ret);
           if (err == SSL_ERROR_WANT_READ) {
-            EV_SET(&change, s, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+            EV_SET(&change, f, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
             kevent(kq, &change, 1, NULL, 0, NULL);
           } else if (err == SSL_ERROR_WANT_WRITE) {
-            EV_SET(&change, s, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
+            EV_SET(&change, f, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
             kevent(kq, &change, 1, NULL, 0, NULL);
           } else {
             printf("Fucked.\n");
@@ -146,7 +150,7 @@ static void *thread(void *j)
 
   // Cleanup
   SSL_free(ssl);
-  close(s);
+  close(f);
   SSL_CTX_free(ctx);
   return 0;
 };

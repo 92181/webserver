@@ -26,8 +26,8 @@
 #define THREAD_CONC_CLIENTS 2048
 #define PACKET_SIZE 16384
 
-#define REDIR_HTTP 1
-#define URL "https://localhost"
+#define REDIR_HTTP 1 // remove
+#define URL "https://localhost" // remove, move to redir example
 
 
 
@@ -228,8 +228,8 @@ static inline void close_socket(ud *x)
   
 
   x->d=0;printf("Closed: %d\n",x->fd);
-  //x->d=atomic_exchange(&sz,x);
-  free(x);// temp
+  x->d=atomic_exchange(&sz,x);
+  //free(x);// temp
 };
 
 // Destroy Server;
@@ -332,10 +332,8 @@ static void *thread(void *j)
   #ifndef __linux__
   struct kevent e[THREAD_CONC_CLIENTS],k,z;char q[PACKET_SIZE];ud x={0};struct sockaddr_in6 u;
   
-  socklen_t y=sizeof(u);int s,r=kqueue();t->kq=r;printf("l->kq: %d\n",r);
-
-  int to=0;
-  // Kqueue For Main Sockets;
+  socklen_t y=sizeof(u);int s,o=0,r=kqueue();t->kq=r;printf("l->kq: %d\n",r); // rename to
+  
   #if REDIR_HTTP
   /*EV_SET(&k,f,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,&x); // on each nr socket.
 
@@ -347,9 +345,8 @@ static void *thread(void *j)
   EV_SET(&k,f,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,&x);*/
   #endif // remove redirection?
   // reg_accept(&r,f); even support it, implement io redir, if too hard remove it all together.
-  // best to implement..
 
-  // just move this (below) to accept, for apple check if ==0 for bsd not. ifndef linux >> nested apple
+  // Kqueue For Main Sockets;
   EV_SET(&k,f,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,&x);
 
   if(r<0||kevent(r,&k,1,0,0,0)<0)
@@ -416,7 +413,7 @@ static void *thread(void *j)
 
     while(i<n)
     {
-      s=e[i].ident;ud *x=(ud*)e[i].udata;printf("Wakeup %d %d %ld %d!\n",s,x->fd,(long)x->d,e[i].filter); // 4 0 1 -1(READ_EVENT) but does not read perhaps so loop? check!
+      s=e[i].ident;ud *x=(ud*)e[i].udata;
 
       if(e[i].flags&(EV_EOF|EV_ERROR))
       {
@@ -429,17 +426,15 @@ static void *thread(void *j)
           close_socket(x);
         };
       }
-      else if(e[i].filter==EVFILT_READ)
+      //else if(e[i].filter==EVFILT_READ)
+      else
       {
         switch((long)(x->d))
         {
           case 0:
           {
             // Handle Accept (!Break) & Activate Main (>Accept);
-            //if((((long)j-(long)ti)/sizeof(td))!=0){printf("Faulty\n\n");break;}
-            s=accept(f,(struct sockaddr*)&u,&y);printf("New Client %d %ld\n",s,(long)(((long)j-(long)ti)/sizeof(td))); // log thread
-            // -1 causes crashes, because register is in front of check? then 2 on 1 sock.
-            // tried with 1 socket, does not solve it.
+            s=accept(f,(struct sockaddr*)&u,&y);printf("New Client %d %ld\n",s,(long)(((long)j-(long)ti)/sizeof(td)));
 
             kevent(r,&k,1,0,0,0);
 
@@ -449,7 +444,7 @@ static void *thread(void *j)
             };
 
             // Get Client Buffer (Linked List);
-            /*do 
+            do 
             {
               x=atomic_load(&sz);
 
@@ -458,77 +453,107 @@ static void *thread(void *j)
                 close(s);goto r;
               };
             }
-            while(!atomic_compare_exchange_weak(&sz,&x,x->d));*/ // atomics not needed perse.
-            x=calloc(1,sizeof(ud));
+            while(!atomic_compare_exchange_weak(&sz,&x,x->d)); // atomics not needed perse.
+            //x=calloc(1,sizeof(ud)); // OLD
+            // remove atomics, will lead to rigidness, but faster cleaner better so do it.
+
+            // atomic alternative here (per thread)
+            //x=sz;sz=x->d; // check at pc.
+
+
+            
 
             // Create SSL Context;
             x->ssl=SSL_new(ssl);SSL_set_fd(x->ssl,s);x->fd=s;
 
             // Create Event;
             EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,x);
-            /*
-            // was __APPLE__ (now not for testing)
-            #if 1
-            // Distribute Clients (1 Accept, Apple Only); // Causes segm fault...
-            to=(to+1)%nt;x->kq=((td*)ti+to)->kq;
-            //x->kq=13;
-            //to=(to+1)%(nt-1);x->kq=((td*)ti+to)->kq;
-            
-            if(kevent(x->kq,&z,1,0,0,0)<0)
-            #else
+
+            x->kq=r; // EXPIRIMENTAL
+            /*#ifndef __APPLE__
             x->kq=r;
 
-            if(kevent(r,&z,1,0,0,0)<0)
-            #endif
+            if(kevent(r,&z,1,0,0,0)<0) // remove, to d=2??
             {
               close_socket(x);break;
-            };*/
-
-            // move to below? register when done.
-
-            printf("Client Done %d %d\n",x->kq,s);
+            };
+            #endif*/
           }
           case 1:
           {
             // SSL Accept (Break Error);
-            //printf("SSL Accept Thread: %ld, Sock %d\n",(long)(((long)j-(long)ti)/sizeof(td)),s);
-            int u=SSL_accept(x->ssl);printf("SSL, %d\n",u); // Segmentation on accept.
+            int u=SSL_accept(x->ssl);
 
             if(u<=0)
             {
               int e=SSL_get_error(x->ssl,u);
 
-              if(e==SSL_ERROR_WANT_READ||e==SSL_ERROR_WANT_WRITE)
+              if(e==SSL_ERROR_WANT_READ) // EXPIRIMENTAL
               {
-                // Re-activate Read Listener;
-                if(x->d==(char*)1)
-                {
-                  EV_SET(&z,s,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,x);
-
-                  if(kevent(x->kq,&z,1,0,0,0)<0)
-                  {
-                    close_socket(x);printf("Failure\n");exit(0);
-                  };
-                }
-                else // NEW
-                {
-                  to=(to+1)%nt;x->kq=((td*)ti+to)->kq; // ifdef apple
-                  x->d=(char*)1;
-                  if(kevent(x->kq,&z,1,0,0,0)<0)
-                  {
-                    close_socket(x);printf("Failure\n");exit(0);
-                  };
-                }
+                EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,x);
+              }
+              else if(e==SSL_ERROR_WANT_WRITE)
+              {
+                EV_SET(&z,s,EVFILT_WRITE,EV_ADD|EV_DISPATCH,0,0,x);
               }
               else
+              {
+                close_socket(x);break;
+              };
+
+              if(kevent(x->kq,&z,1,0,0,0)<0)
               {
                 close_socket(x);
               };
 
-              x->d=(char*)1;break;
+              /*if(e!=SSL_ERROR_WANT_READ&&e!=SSL_ERROR_WANT_WRITE)
+              {
+                close_socket(x);break;
+              }; // set filter here?
+
+              // Handle Listener & Load Balance (Apple Only);
+              if(x->d==(char*)1)
+              {
+                int filter = (e == SSL_ERROR_WANT_WRITE) ? EVFILT_WRITE : EVFILT_READ;
+                EV_SET(&z,s,filter,EV_ADD|EV_DISPATCH,0,0,x);
+                //EV_SET(&z,s,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,x); // filter to eventtype
+
+                if(kevent(x->kq,&z,1,0,0,0)<0)
+                {
+                  close_socket(x);
+                };
+              }
+              else
+              {
+                x->d=(char*)1;
+
+                #if __APPLE__
+                o=(o+1)%nt;x->kq=((td*)ti+o)->kq;
+                
+                if(kevent(x->kq,&z,1,0,0,0)<0)
+                {
+                  close_socket(x);
+                };
+                #endif
+              };*/
+
+              break;
             }
             else
             {
+              EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,x); // EXPIRIMENTAL
+
+              #if __APPLE__
+              o=(o+1)%nt;x->kq=((td*)ti+o)->kq; // EXPIRIMENTAL
+              #endif
+
+              if(kevent(x->kq,&z,1,0,0,0)<0) // EXPIRIMENTAL
+              {
+                close_socket(x);
+              };
+              // could add here for both freebsd and apple. on error just specific add.
+              // seems cleaner also no x->d==(char*)1 check!!
+
               x->d=(char*)2;printf("SSL Done %d\n",s);
             };
           }
@@ -547,23 +572,32 @@ static void *thread(void *j)
             if(u>0)
             {
               // Process;
-              //recv_func(x,q,u);
-              const char h[]="HTTP/1.1 200\r\n\r\nHello World";server_send(x,h,sizeof(h)-1);
-              printf("Send Done\n");close_socket(x);break;
+              recv_func(x,q,u);printf("Send Done\n");
+              //const char h[]="HTTP/1.1 200\r\n\r\nHello World";server_send(x,h,sizeof(h)-1);printf("Send OK\n");close_socket(x);break;
             };
+
+            break;
+          }
+          case 2:
+          {
+            // Backpressure Handler (Drained);
+            drain_func(x);
+
+            // Reset;
+            x->wr=0;
 
             break;
           }
         };
       }
-      else if(e[i].filter==EVFILT_WRITE)
+      /*else if(e[i].filter==EVFILT_WRITE)
       {
         // Backpressure Handler (Drained);
         drain_func(x);
 
         // Reset;
         x->wr=0;
-      };
+      };*/
 
       r:
       i+=1;
