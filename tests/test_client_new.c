@@ -20,6 +20,13 @@
 // Define Globals;
 struct addrinfo hi,*rs;pthread_t *nu;
 
+typedef struct cl
+{
+  int fd;
+  SSL *ssl;
+  int kq;
+} cl;
+
 const char d[]="HTTP/1.1 200\r\nContent-Length: 1597\r\n\r\nGerman Car Fabrication (1900-2025)\n\n1901 - Benz launches the Velo, the first modest German automobile.  1902 - DMG's Mercedes 35-HP sets new speed standards.  Post-WWI, BMW pivots from aircraft engines to cars.\n"
   "1924 - Horch's 12/50 offers affordable refinement.  193 - Audi's Front pioneers front-wheel drive.  1937 - Volkswagen's Beetle (designed by Porsche) becomes the “people's car.”\n"
   "WWII forces factories to produce military hardware, but advances in alloy casting and aerodynamics emerge.\n"
@@ -30,8 +37,44 @@ const char d[]="HTTP/1.1 200\r\nContent-Length: 1597\r\n\r\nGerman Car Fabricati
   "From the humble Velo to autonomous electric sedans, German carmaking has continuously fused performance, precision, and sustainability.";
 
 // Client WS Helper Function;
-static void ws_client_set()
+static void ws_client_set(unsigned char **j,unsigned long l)
 {
+  //unsigned char *i=*(unsigned char*)j+10;
+  unsigned char *i=*j+10;
+
+  if(l<126)
+  {
+    *(i-2)=(1<<7)+1;
+    *(i-1)=l;
+
+    *j=i-2;
+  }
+  else if(l<65536)
+  {
+    *(i-4)=(1<<7)+1;
+    *(i-3)=126;
+
+    *(unsigned short*)(i-2)=*((unsigned char*)&l)<<8|*(((unsigned char*)&l)+1);
+
+    *j=i-4;
+  }
+  else
+  {
+    **j=(1<<7)+1;*(*j+1)=127;
+
+    unsigned char *x=(unsigned char*)&l,*k=*j+2;x+=8;//char *k=*j+2;
+
+    while(k<i) // untested; WRONG?
+    {
+      *k=*x;
+
+      k+=1;x-=1;
+    };
+  };
+
+  // FIN (1) + bullshit (7)
+  // mask? (1 to 0!) + payload length (7) (dy)
+  // content (x)
 
   // fix ws tester client_send (add mask 18,52,86,120) (14 bytes total) (tester only)
 };
@@ -41,7 +84,7 @@ static void *thread(void *j)
 {
   // Thread Setup;
   int kq=kqueue(),i=0;
-  struct kevent change, event; // would need to use the same kqueue per thread for multiple sockets.
+  struct kevent change, e; // would need to use the same kqueue per thread for multiple sockets.
 
   SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
 
@@ -79,57 +122,104 @@ static void *thread(void *j)
   connect(f,rs->ai_addr,rs->ai_addrlen); // Will likely return EINPROGRESS
 
   SSL *ssl = SSL_new(ctx);SSL_set_fd(ssl, f);
-  //SSL_set_tlsext_host_name(ssl, hostname);
+
+  //const unsigned long tm=15UL<<60,am=(~tm); // remove
+
+  // reregister with new opcode when needed << use this approuch.
+  // so we just call kevent again.
 
 
   // Initially, we want to know when the socket is writable to start the handshake
-  EV_SET(&change, f, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
+  EV_SET(&change, f, EVFILT_WRITE, EV_ADD, 0, 0, 0);
+  kevent(kq, &change, 1, NULL, 0, NULL);
+
+  EV_SET(&change, f, EVFILT_READ, EV_ADD, 0, 0, 0);
   kevent(kq, &change, 1, NULL, 0, NULL);
 
   printf("Starting event loop...\n");
 
-  int connected = 0;
-  while (1) 
+  int connected = 0; // store in userdata
+
+  while(1) 
   {
-    int nev = kevent(kq, NULL, 0, &event, 1, NULL);
-    if (nev < 0) break;
+    if(kevent(kq,0,0,&e,1,0)<0)
+    {
+      continue;
+    };
 
     // check time here 
     // if http time done ELSE ws
-    int s=event.ident;
 
-    if (s == f) 
+    int s=e.ident;long d=e.udata;
+
+    if(e.flags&(EV_EOF|EV_ERROR))
+    {
+      if(s==f)
+      {
+        close(s);
+      };
+    }
+    else
+    {
+      switch()
+      {
+      case constant expression:
+        /* code */
+        break;
+      
+      default:
+        break;
+      }
+    };
+
+
+    if(s==f) 
     {
       if (!connected) 
       {
-        int ret = SSL_connect(ssl);
+        int u=SSL_connect(ssl);
 
-        if (ret == 1) 
+        if(u==1) 
         {
           printf("SSL Connection Established!\n");
           connected = 1;
           
           const char t[]="GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";SSL_write(ssl,t,sizeof(t)-1);
                     
-          EV_SET(&change, f, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+          EV_SET(&change, f, EVFILT_READ, EV_ADD, 0, 0, NULL);
           kevent(kq, &change, 1, NULL, 0, NULL);
-          EV_SET(&change, f, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
-          kevent(kq, &change, 1, NULL, 0, NULL);
-        } 
+        }
         else 
         {
-          int err = SSL_get_error(ssl, ret);
+          int e=SSL_get_error(x->ssl,u);
+
+          if(e==SSL_ERROR_WANT_WRITE)
+          {
+            EV_SET(&z,s,EVFILT_WRITE,EV_ADD|EV_ONESHOT,0,0,x);
+
+            if(kevent(x->kq,&z,1,0,0,0)<0)
+            {
+              close_socket(x);
+            };
+          }
+          else if(e!=SSL_ERROR_WANT_READ)
+          {
+            close_socket(x);break;
+          };
+
+          /*int err = SSL_get_error(ssl,u);
+
           if (err == SSL_ERROR_WANT_READ) {
-            EV_SET(&change, f, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
-            kevent(kq, &change, 1, NULL, 0, NULL);
+            //EV_SET(&change, f, EVFILT_READ, EV_ADD, 0, 0, NULL);
+            //kevent(kq, &change, 1, NULL, 0, NULL);
           } else if (err == SSL_ERROR_WANT_WRITE) {
-            EV_SET(&change, f, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
+            EV_SET(&change, f, EVFILT_WRITE, EV_ADD, 0, 0, NULL);
             kevent(kq, &change, 1, NULL, 0, NULL);
           } else {
             printf("Fucked.\n");
             //ERR_print_errors_fp(stderr);
             break;
-          }
+          }*/
         }
       } 
       else 
@@ -190,6 +280,4 @@ int main()
 
     r+=*q;f+=*(q+1);free(q);
   };
-
-
 };

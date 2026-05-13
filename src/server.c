@@ -67,15 +67,12 @@ typedef struct
   #endif
 } td;
 
-//void (*recv_func)(ud*,void*,int);void(*drain_func)(ud*);void(*close_func)(ud*);
 void (*recv_func)(ud*,void*,int),(*drain_func)(ud*),(*close_func)(ud*);
 
 _Atomic (ud*)sz;ud *sl;td *ti;
 
 // Define Queue & IO Functions, Variables;
 #ifndef __linux__
-//int to=0;
-
 static void server_send(ud *x,const void *b,unsigned int l) 
 {
   int u=SSL_write(x->ssl,b,l);
@@ -205,8 +202,8 @@ static int setup_sock(unsigned int *z,unsigned short p)
   *(v+1)=*(z+1);
   *(v+2)=*(z+2);
   *(v+3)=*(z+3);
-  
-  bind(s,(struct sockaddr*)&q,sizeof(q));listen(s,2500);
+
+  bind(s,(struct sockaddr*)&q,sizeof(q));listen(s,SOMAXCONN);
 
   return s;
 };
@@ -221,13 +218,14 @@ static inline void close_socket(ud *x)
     SSL_free(x->ssl);x->ssl=0;
   };
 
-  if((long)x->d>2)
+  if((long)x->d>3)
   {
     close_func(x);
   };
   
 
   x->d=0;printf("Closed: %d\n",x->fd);
+
   x->d=atomic_exchange(&sz,x);
   //free(x);// temp
 };
@@ -332,7 +330,7 @@ static void *thread(void *j)
   #ifndef __linux__
   struct kevent e[THREAD_CONC_CLIENTS],k,z;char q[PACKET_SIZE];ud x={0};struct sockaddr_in6 u;
   
-  socklen_t y=sizeof(u);int s,o=0,r=kqueue();t->kq=r;printf("l->kq: %d\n",r); // rename to
+  socklen_t y=sizeof(u);int s,o=0,r=kqueue();t->kq=r;printf("l->kq: %d\n",r);
   
   #if REDIR_HTTP
   /*EV_SET(&k,f,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,&x); // on each nr socket.
@@ -347,15 +345,12 @@ static void *thread(void *j)
   // reg_accept(&r,f); even support it, implement io redir, if too hard remove it all together.
 
   // Kqueue For Main Sockets;
-  EV_SET(&k,f,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,&x);
+  EV_SET(&k,f,EVFILT_READ,EV_ADD,0,0,&x);
 
   if(r<0||kevent(r,&k,1,0,0,0)<0)
   {
     pthread_exit(0);
   };
-
-  // do not move this (below keep here)
-  EV_SET(&k,f,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,&x);
   #else
   int u,f=0;struct io_uring_cqe *e;ud *x;struct io_uring r;
 
@@ -426,21 +421,26 @@ static void *thread(void *j)
           close_socket(x);
         };
       }
-      //else if(e[i].filter==EVFILT_READ)
       else
       {
         switch((long)(x->d))
         {
           case 0:
           {
-            // Handle Accept (!Break) & Activate Main (>Accept);
-            s=accept(f,(struct sockaddr*)&u,&y);printf("New Client %d %ld\n",s,(long)(((long)j-(long)ti)/sizeof(td)));
+            // Handle Accept (!Break);
+            #if __APPLE__
+            if(s==f){
+            #endif
 
-            kevent(r,&k,1,0,0,0);
+            s=accept(f,(struct sockaddr*)&u,&y);
 
-            if(s<0||fcntl(s,F_SETFL,O_NONBLOCK)<0)
+            if(s<0)
             {
               break;
+            }
+            else if(fcntl(s,F_SETFL,O_NONBLOCK)<0)
+            {
+              close(s);break;
             };
 
             // Get Client Buffer (Linked List);
@@ -453,31 +453,33 @@ static void *thread(void *j)
                 close(s);goto r;
               };
             }
-            while(!atomic_compare_exchange_weak(&sz,&x,x->d)); // atomics not needed perse.
-            //x=calloc(1,sizeof(ud)); // OLD
-            // remove atomics, will lead to rigidness, but faster cleaner better so do it.
+            while(!atomic_compare_exchange_weak(&sz,&x,x->d));
+            //x=calloc(1,sizeof(ud)); // temp
 
-            // atomic alternative here (per thread)
-            //x=sz;sz=x->d; // check at pc.
+            // Get SSL & Fill Struct;
+            x->ssl=SSL_new(ssl);SSL_set_fd(x->ssl,s);x->fd=s;x->d=(char*)1;
 
-
+            // Register Event;
+            EV_SET(&z,s,EVFILT_READ,EV_ADD,0,0,x);
             
+            #if __APPLE__
+              o=((o+1)%(nt-1))+1;
 
-            // Create SSL Context;
-            x->ssl=SSL_new(ssl);SSL_set_fd(x->ssl,s);x->fd=s;
+              if(kevent(((td*)ti+o)->kq,&z,1,0,0,0)<0)
+              {
+                close_socket(x);
+              };
 
-            // Create Event;
-            EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,x);
-
-            x->kq=r; // EXPIRIMENTAL
-            /*#ifndef __APPLE__
-            x->kq=r;
-
-            if(kevent(r,&z,1,0,0,0)<0) // remove, to d=2??
+              break;
+            };
+            #else
+            if(kevent(r,&z,1,0,0,0)<0)
             {
               close_socket(x);break;
             };
-            #endif*/
+            #endif
+
+            x->kq=r;
           }
           case 1:
           {
@@ -488,116 +490,51 @@ static void *thread(void *j)
             {
               int e=SSL_get_error(x->ssl,u);
 
-              if(e==SSL_ERROR_WANT_READ) // EXPIRIMENTAL
+              if(e==SSL_ERROR_WANT_WRITE)
               {
-                EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,x);
-              }
-              else if(e==SSL_ERROR_WANT_WRITE)
-              {
-                EV_SET(&z,s,EVFILT_WRITE,EV_ADD|EV_DISPATCH,0,0,x);
-              }
-              else
-              {
-                close_socket(x);break;
-              };
-
-              if(kevent(x->kq,&z,1,0,0,0)<0)
-              {
-                close_socket(x);
-              };
-
-              /*if(e!=SSL_ERROR_WANT_READ&&e!=SSL_ERROR_WANT_WRITE)
-              {
-                close_socket(x);break;
-              }; // set filter here?
-
-              // Handle Listener & Load Balance (Apple Only);
-              if(x->d==(char*)1)
-              {
-                int filter = (e == SSL_ERROR_WANT_WRITE) ? EVFILT_WRITE : EVFILT_READ;
-                EV_SET(&z,s,filter,EV_ADD|EV_DISPATCH,0,0,x);
-                //EV_SET(&z,s,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,x); // filter to eventtype
+                EV_SET(&z,s,EVFILT_WRITE,EV_ADD|EV_ONESHOT,0,0,x);
 
                 if(kevent(x->kq,&z,1,0,0,0)<0)
                 {
                   close_socket(x);
                 };
               }
-              else
+              else if(e!=SSL_ERROR_WANT_READ)
               {
-                x->d=(char*)1;
-
-                #if __APPLE__
-                o=(o+1)%nt;x->kq=((td*)ti+o)->kq;
-                
-                if(kevent(x->kq,&z,1,0,0,0)<0)
-                {
-                  close_socket(x);
-                };
-                #endif
-              };*/
+                close_socket(x);break;
+              };
 
               break;
             }
             else
             {
-              EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,x); // EXPIRIMENTAL
-
-              #if __APPLE__
-              o=(o+1)%nt;x->kq=((td*)ti+o)->kq; // EXPIRIMENTAL
-              #endif
-
-              if(kevent(x->kq,&z,1,0,0,0)<0) // EXPIRIMENTAL
-              {
-                close_socket(x);
-              };
-              // could add here for both freebsd and apple. on error just specific add.
-              // seems cleaner also no x->d==(char*)1 check!!
-
-              x->d=(char*)2;printf("SSL Done %d\n",s);
+              x->d=(char*)3;printf("SSL Done\n");
             };
           }
           default:
           {
-            int u=SSL_read(x->ssl,q,PACKET_SIZE);printf("Read %d\n",u);
-
-            // Register Listener;
-            EV_SET(&z,s,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,x);
-
-            if(kevent(x->kq,&z,1,0,0,0)<0)
+            if(e[i].filter!=EVFILT_WRITE)
             {
-              close_socket(x);break;
-            };
+              int u=SSL_read(x->ssl,q,PACKET_SIZE);printf("Read %d\n",u);
 
-            if(u>0)
-            {
+              // Seems to work fine even with atomics, so keep them..
+
               // Process;
-              recv_func(x,q,u);printf("Send Done\n");
-              //const char h[]="HTTP/1.1 200\r\n\r\nHello World";server_send(x,h,sizeof(h)-1);printf("Send OK\n");close_socket(x);break;
+              if(u>0)
+              {
+                recv_func(x,q,u);printf("Send Done\n");
+              };
+            }
+            else
+            {
+              // Backpressure Handler (Drained);
+              drain_func(x);x->wr=0;
             };
-
-            break;
-          }
-          case 2:
-          {
-            // Backpressure Handler (Drained);
-            drain_func(x);
-
-            // Reset;
-            x->wr=0;
 
             break;
           }
         };
-      }
-      /*else if(e[i].filter==EVFILT_WRITE)
-      {
-        // Backpressure Handler (Drained);
-        drain_func(x);
-
-        // Reset;
-        x->wr=0;
-      };*/
+      };
 
       r:
       i+=1;
@@ -748,7 +685,7 @@ static inline int start_server(unsigned int *z,unsigned short p,void(*v)(ud*,voi
   // Setup Server Functions;
   int i=sysconf(_SC_NPROCESSORS_ONLN);nu=malloc(i*sizeof(pthread_t));recv_func=v;drain_func=b;close_func=n;
 
-  if(nu==0)
+  if(nu==0||i<2)
   {
     return 1;
   };
