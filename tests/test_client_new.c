@@ -13,21 +13,23 @@
 #define SERVER_IP "::1"
 #define SERVER_PORT "443"
 
-#define THREAD_CONNECTIONS 12
-#define HTTP_LOAD_TIME 14
+#define THREAD_CONNECTIONS 1
+#define HTTP_LOAD_TIME 14 // 14
 #define WS_LOAD_TIME 16
 
 // Define Globals;
-struct addrinfo hi,*rs;pthread_t *nu;
+const unsigned long tm=15UL<<60,am=(~tm);struct addrinfo hi,*rs;pthread_t *nu;
 
-typedef struct cl
+typedef struct cl cl;
+
+struct cl
 {
-  int fd;
+  int fd,wr;
   SSL *ssl;
-  int kq;
-} cl;
+  cl *next;
+};
 
-const char d[]="HTTP/1.1 200\r\nContent-Length: 1597\r\n\r\nGerman Car Fabrication (1900-2025)\n\n1901 - Benz launches the Velo, the first modest German automobile.  1902 - DMG's Mercedes 35-HP sets new speed standards.  Post-WWI, BMW pivots from aircraft engines to cars.\n"
+const char d[]="\n\nGerman Car Fabrication (1900-2025)\n\n1901 - Benz launches the Velo, the first modest German automobile.  1902 - DMG's Mercedes 35-HP sets new speed standards.  Post-WWI, BMW pivots from aircraft engines to cars.\n"
   "1924 - Horch's 12/50 offers affordable refinement.  193 - Audi's Front pioneers front-wheel drive.  1937 - Volkswagen's Beetle (designed by Porsche) becomes the “people's car.”\n"
   "WWII forces factories to produce military hardware, but advances in alloy casting and aerodynamics emerge.\n"
   "1949 - Mercedes-Benz's 300 SL Gullwing debuts fuel injection; Porsche's 356 shows lightweight sports engineering.  The 1950s-60s “Wirtschaftswunder” fuels mass-production: VW's Microbus, Audi's safety-cell 100, BMW's driver-focused E30 3-Series.\n"
@@ -36,35 +38,59 @@ const char d[]="HTTP/1.1 200\r\nContent-Length: 1597\r\n\r\nGerman Car Fabricati
   "2021-2025 - Electrification dominates: 70% of VW Group sales are electric, solid-state batteries give 500 km range in 15 min.  Mercedes's autonomous S-Class Vision EQ, Audi's e-tronic quattro, and BMW's iX M showcase AI, Lidar, and carbon-fiber monocoques.  Factories run on cobots and digital twins, producing a customized vehicle every 12 hours.\n"
   "From the humble Velo to autonomous electric sedans, German carmaking has continuously fused performance, precision, and sustainability.";
 
-// Client WS Helper Function;
-static void ws_client_set(unsigned char **j,unsigned long l)
+// Copy Memory (Destination, Source, Source + Size);
+static inline void mem_copy(void *d,const void *i,const void *e)
 {
-  //unsigned char *i=*(unsigned char*)j+10;
-  unsigned char *i=*j+10;
+  while(i+4<=e)
+  {
+    *(unsigned int*)d=*(unsigned int*)i;
+    
+    i+=4;d+=4;
+  };
+
+  // Faster Nested Loop (~Wolf);
+  if(i+1<e)
+  {
+    *(unsigned char*)d=*(unsigned char*)i;
+    *(unsigned char*)(d+1)=*(unsigned char*)(i+1);
+
+    if(i+2<e)
+    {
+      *(unsigned char*)(d+2)=*(unsigned char*)(i+2);
+    };
+  }
+  else if(i+1==e)
+  {
+    *(unsigned char*)d=*(unsigned char*)i;
+  };
+};
+
+// Client WS Helper Function (Static Mask);
+static int ws_client_send(SSL *s,unsigned char *b,unsigned long l)
+{
+  unsigned char *i=b+14,*c=b+10,m[]={18,52,86,120};
 
   if(l<126)
   {
-    *(i-2)=(1<<7)+1;
-    *(i-1)=l;
+    *(i-6)=(1<<7)+1;*(i-5)=l|1<<7;
 
-    *j=i-2;
+    i=i-6;
   }
   else if(l<65536)
   {
-    *(i-4)=(1<<7)+1;
-    *(i-3)=126;
+    *(i-4)=(1<<7)+1;*(i-3)=126|1<<7;
 
     *(unsigned short*)(i-2)=*((unsigned char*)&l)<<8|*(((unsigned char*)&l)+1);
 
-    *j=i-4;
+    i=i-4;
   }
   else
   {
-    **j=(1<<7)+1;*(*j+1)=127;
+    *b=(1<<7)+1;*(b+1)=255;
 
-    unsigned char *x=(unsigned char*)&l,*k=*j+2;x+=8;//char *k=*j+2;
+    unsigned char *x=(unsigned char*)&l,*k=b+2;x+=8;
 
-    while(k<i) // untested; WRONG?
+    while(k<i) // untested; OK?
     {
       *k=*x;
 
@@ -72,176 +98,245 @@ static void ws_client_set(unsigned char **j,unsigned long l)
     };
   };
 
-  // FIN (1) + bullshit (7)
-  // mask? (1 to 0!) + payload length (7) (dy)
-  // content (x)
+  // Add Mask (4);
+  *(unsigned int*)c=*(unsigned int*)m;c+=sizeof(char)*4;
 
-  // fix ws tester client_send (add mask 18,52,86,120) (14 bytes total) (tester only)
+  // Mask Data (B);
+  unsigned long z=0;
+
+  while(z<l)
+  {
+    *c=*c^m[z%4];c+=1;z+=1;
+  };
+
+  // CHECK FIN (1) + bullshit (7)
+  // CHECK mask bit set
+  // CHECK content (x)
+
+  return SSL_write(s,i,b-i);
+};
+
+// Close Socket;
+static void close_socket(cl **b,cl *m)
+{
+  close(m->fd);SSL_free(m->ssl);
+  
+  free(m);
+  //m->next=(*b)->next;*b=m; // correct?
+  
+  // close
 };
 
 // Processing Function;
 static void *thread(void *j)
 {
   // Thread Setup;
-  int kq=kqueue(),i=0;
-  struct kevent change, e; // would need to use the same kqueue per thread for multiple sockets.
+  struct kevent z,x,e;int r=kqueue(),k=0,v=0,i=0;char q[16384];
 
-  SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+  SSL_CTX *ctx=SSL_CTX_new(TLS_client_method());struct timespec s,d;
 
-  // Launch Sockets;
-  while(0) // 1?
+  // Initialize Linked List;
+  cl a[THREAD_CONNECTIONS],*b=a;
+
+  while(b<a+THREAD_CONNECTIONS)
   {
-    while(i<THREAD_CONNECTIONS)
-    {
-      // connect logic
-      /*
-      int s=socket(rs->ai_family,rs->ai_socktype,rs->ai_protocol);
-      fcntl(s,F_SETFL,O_NONBLOCK);
-
-      connect(s,rs->ai_addr,rs->ai_addrlen);
-
-      SSL *ssl = SSL_new(ctx);SSL_set_fd(ssl, s);
-
-      EV_SET(&change, s, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
-      kevent(kq, &change, 1, NULL, 0, NULL);
-      */
-
-      i+=1; // on disconnect -=1;
-    };
-
-    // wait
-    // int nev = kevent(kq, NULL, 0, &event, 1, NULL);
-
-    // receive logic
+    b->next=b+1;b+=1;
   };
 
-  // test first before moving!
+  b=a;timespec_get(&s,1);
 
-  int f=socket(rs->ai_family,rs->ai_socktype,rs->ai_protocol);fcntl(f,F_SETFL,O_NONBLOCK);
-
-  connect(f,rs->ai_addr,rs->ai_addrlen); // Will likely return EINPROGRESS
-
-  SSL *ssl = SSL_new(ctx);SSL_set_fd(ssl, f);
-
-  //const unsigned long tm=15UL<<60,am=(~tm); // remove
-
-  // reregister with new opcode when needed << use this approuch.
-  // so we just call kevent again.
-
-
-  // Initially, we want to know when the socket is writable to start the handshake
-  EV_SET(&change, f, EVFILT_WRITE, EV_ADD, 0, 0, 0);
-  kevent(kq, &change, 1, NULL, 0, NULL);
-
-  EV_SET(&change, f, EVFILT_READ, EV_ADD, 0, 0, 0);
-  kevent(kq, &change, 1, NULL, 0, NULL);
-
-  printf("Starting event loop...\n");
-
-  int connected = 0; // store in userdata
-
-  while(1) 
+  while(1)
   {
-    if(kevent(kq,0,0,&e,1,0)<0)
+    // Launch Sockets;
+    while(i<THREAD_CONNECTIONS)
+    {
+      int f=socket(rs->ai_family,rs->ai_socktype,rs->ai_protocol);
+
+      if(f<0)
+      {
+        continue;
+      }
+      else if(fcntl(f,F_SETFL,O_NONBLOCK)<0)
+      {
+        close(f);
+      };
+
+      SSL *ssl=SSL_new(ctx);SSL_set_fd(ssl,f);connect(f,rs->ai_addr,rs->ai_addrlen);
+
+      // Store Info (Linked List);
+      cl *m=calloc(1,sizeof(cl));
+      //cl *m=b;b=b->next;
+
+      m->fd=f;m->ssl=ssl; // ,.,.
+
+      // Register Socket Events;
+      EV_SET(&z,f,EVFILT_WRITE,EV_ADD,0,0,m);
+
+      if(kevent(r,&z,1,0,0,0)<0)
+      {
+        close_socket(&b,m);
+      };
+
+      i+=1;
+    };
+
+    // Check Time;
+    int g=0;timespec_get(&d,1);
+
+    if(d.tv_sec-s.tv_sec>HTTP_LOAD_TIME)
+    {
+      if(d.tv_sec-s.tv_sec>HTTP_LOAD_TIME+WS_LOAD_TIME)
+      {
+        // Save Statistics;
+        unsigned int *s=malloc(sizeof(int)*4);*s=k;*(s+1)=v;
+
+        // Thread Cleanup;
+        SSL_CTX_free(ctx);close(r);pthread_exit(s);
+      }
+      else
+      {
+        g=1; // switch
+      };
+    };
+
+    // Wait;
+    if(kevent(r,0,0,&e,1,0)<0)
     {
       continue;
     };
 
-    // check time here 
-    // if http time done ELSE ws
-
-    int s=e.ident;long d=e.udata;
+    // Process;
+    unsigned long o=(long)e.udata;int s=e.ident;cl *m=(cl*)(o&am); // ok?
 
     if(e.flags&(EV_EOF|EV_ERROR))
     {
-      if(s==f)
-      {
-        close(s);
-      };
+      close_socket(&b,m);i-=1;
     }
     else
     {
-      switch()
+      //printf("Client EV Code: %lu, Socket: %d, Max: %d\n",(o&tm)>>60,s,i);
+      switch((o&tm)>>60)
       {
-      case constant expression:
-        /* code */
-        break;
-      
-      default:
-        break;
-      }
-    };
-
-
-    if(s==f) 
-    {
-      if (!connected) 
-      {
-        int u=SSL_connect(ssl);
-
-        if(u==1) 
+        case 0:
         {
-          printf("SSL Connection Established!\n");
-          connected = 1;
-          
-          const char t[]="GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";SSL_write(ssl,t,sizeof(t)-1);
-                    
-          EV_SET(&change, f, EVFILT_READ, EV_ADD, 0, 0, NULL);
-          kevent(kq, &change, 1, NULL, 0, NULL);
-        }
-        else 
-        {
-          int e=SSL_get_error(x->ssl,u);
+          int u=SSL_connect(m->ssl);
 
-          if(e==SSL_ERROR_WANT_WRITE)
+          if(u==1)
           {
-            EV_SET(&z,s,EVFILT_WRITE,EV_ADD|EV_ONESHOT,0,0,x);
-
-            if(kevent(x->kq,&z,1,0,0,0)<0)
+            if(!g)
             {
-              close_socket(x);
+              // Write HTTP;
+              const char t[]="GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";SSL_write(m->ssl,t,sizeof(t)-1);
+            }
+            else
+            {
+              // Write WS;
+              const char t[]="GET /ws HTTP/1.1\r\nHost: localhost\r\nSec-WebSocket-Key: dwO8+1t9V6bheeWPWdC8mg==\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n";
+
+              SSL_write(m->ssl,t,sizeof(t)-1);
+            };
+
+            // Register Read;
+            EV_SET(&x,s,EVFILT_READ,EV_ADD,0,0,(void*)((unsigned long)m|1UL<<60));//printf("SSL ConX Established!\n");
+            
+            if(kevent(r,&x,1,0,0,0)<0)
+            {
+              close_socket(&b,m);i-=1;
             };
           }
-          else if(e!=SSL_ERROR_WANT_READ)
+          else 
           {
-            close_socket(x);break;
+            int e=SSL_get_error(m->ssl,u);
+
+            if(e==SSL_ERROR_WANT_READ)
+            {
+              EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_ONESHOT,0,0,m);
+
+              if(kevent(r,&z,1,0,0,0)<0)
+              {
+                close_socket(&b,m);i-=1;
+              };
+            }
+            else if(e!=SSL_ERROR_WANT_WRITE)
+            {
+              close_socket(&b,m);i-=1;
+            };
           };
 
-          /*int err = SSL_get_error(ssl,u);
-
-          if (err == SSL_ERROR_WANT_READ) {
-            //EV_SET(&change, f, EVFILT_READ, EV_ADD, 0, 0, NULL);
-            //kevent(kq, &change, 1, NULL, 0, NULL);
-          } else if (err == SSL_ERROR_WANT_WRITE) {
-            EV_SET(&change, f, EVFILT_WRITE, EV_ADD, 0, 0, NULL);
-            kevent(kq, &change, 1, NULL, 0, NULL);
-          } else {
-            printf("Fucked.\n");
-            //ERR_print_errors_fp(stderr);
-            break;
-          }*/
-        }
-      } 
-      else 
-      {
-        // Read the response
-        char buf[1024];
-        int bytes = SSL_read(ssl, buf, sizeof(buf) - 1);
-        if (bytes > 0) {
-          buf[bytes] = 0;
-          printf("Received %d bytes:\n%s\n", bytes, buf);
-        } else {
-          printf("Connection closed or error.\n");
           break;
         }
-      }
-    }
-  }
+        case 1:
+        {
+          int u=SSL_read(m->ssl,q,sizeof(q));
 
-  // Cleanup
-  SSL_free(ssl);
-  close(f);
-  SSL_CTX_free(ctx);
+          if(!g)
+          {
+            // Response HTTP;
+            if(u>0) 
+            {
+              q[u]=0;printf("Received: %d, Content:\n%s\n",u,q);
+            };
+
+            close_socket(&b,m);i-=1;
+          }
+          else
+          {
+            // Check WS Upgrade Confirmation (Match);
+            const char t[]="HTTP/1.1 101\r\nupgrade: websocket\r\nConnection: upgrade\r\nSec-WebSocket-Accept: fpKENP7NB/nR0atevrsq+XuWAis=\r\n\r\n",*y=t;
+
+            if(u>0) 
+            {
+              char *x=q; // ok?
+
+              while(x<q+u)
+              {
+                if(*y!=*x)
+                {
+                  break;
+                };
+
+                x+=1;y+=1; // ok?
+              };
+
+              if(x<q+u)
+              {
+                unsigned char b[77824],*i=b+14,s=85,a;
+
+                // Fill Buffer ('Random' Sequence);
+                while(i<b+sizeof(b))
+                {
+                  s>>=1;if(s&1){s^=184;};
+
+                  *i=s;i+=1;
+                };
+
+                // Message Test (102 Bytes);
+                int u=ws_client_send(m->ssl,b,102);printf("WS Send %u\n",u);
+
+                // Message Test (1597 Bytes);
+                /*if(ws_client_send(m->ssl,b,1597)==1597){v+=1;}else{v+=2;};
+
+                // Message Test (>65526 Bytes);
+                if(ws_client_send(m->ssl,b,69632)==69632){v+=1;}else{v+=2;};*/
+              }
+              else
+              {
+                // Log Failure;
+                v+=1;
+              };
+            }
+            else
+            {
+              close_socket(&b,m);i-=1;
+            };
+          };
+
+          break;
+        }
+      };
+    };
+  };
+
   return 0;
 };
 
@@ -255,7 +350,7 @@ int main()
     freeaddrinfo(rs);return 1;
   };
 
-  // Launch Threads;
+  // Get CPU Info;
   int i=sysconf(_SC_NPROCESSORS_ONLN);nu=malloc(i*sizeof(pthread_t));
 
   if(nu==0)
@@ -265,11 +360,12 @@ int main()
 
   unsigned int x=0,r=0,f=0,*q;char *j=0;
 
-  x=0;f=0;r=0;
-
+  // Launch Threads;
   while(x<i)
   {
     pthread_create(&nu[x],0,thread,j+x);x+=1;
+    
+    //break; // TEMP
   };
 
   x=0;
@@ -278,6 +374,11 @@ int main()
   {
     pthread_join(*(nu+x),(void**)&q);x+=1;
 
-    r+=*q;f+=*(q+1);free(q);
+    r+=*q;f+=*(q+1);free(q); // statistics...
   };
+
+  printf("✅ HTTPS Tests, RPS: %d, Failed: %d.\n",(r/HTTP_LOAD_TIME),f);
+  printf("✅ WS Tests, RPS: %d, Failed: %d.\n",(r/HTTP_LOAD_TIME),f);
+
+  return 0;
 };

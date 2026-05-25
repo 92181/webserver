@@ -27,9 +27,9 @@ static void ws_key(const char *i,char **o)
 // https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers
 
 // Unmask WebSocket Frame;
-static void ws_header(char **j,unsigned long *k) // return OPCODE
+static void ws_header(unsigned char **j,unsigned long *k) // return OPCODE
 {
-  char *i=*j;
+  unsigned char *i=*j;
 
   // Get Payload Length;
   unsigned long l=*(i+1)&127;
@@ -46,7 +46,7 @@ static void ws_header(char **j,unsigned long *k) // return OPCODE
   else
   {
     printf("Big READ USED\n");
-    i+=2;char *e=i+8;l=0;
+    i+=2;unsigned char *e=i+8;l=0;
 
     while(i<e)
     {

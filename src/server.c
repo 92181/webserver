@@ -45,7 +45,6 @@ typedef struct ux
 {
   int fd,wr;
   SSL *ssl;
-  //unsigned int wr;
   void *d;
 
   #if __linux__
@@ -71,21 +70,42 @@ void (*recv_func)(ud*,void*,int),(*drain_func)(ud*),(*close_func)(ud*);
 
 _Atomic (ud*)sz;ud *sl;td *ti;
 
+// Close Socket;
+static inline void close_socket(ud *x)
+{
+  close(x->fd);
+
+  // Free & Reset;
+  SSL_free(x->ssl);x->ssl=0;
+
+  if((long)x->d>3)
+  {
+    close_func(x);
+  };
+
+  printf("Closed: %d\n",x->fd);
+  
+  x->d=0;x->d=atomic_exchange(&sz,x);
+};
+
 // Define Queue & IO Functions, Variables;
 #ifndef __linux__
-static void server_send(ud *x,const void *b,unsigned int l) 
+static void server_send(ud *x,const void *b,unsigned int l)
 {
   int u=SSL_write(x->ssl,b,l);
 
   if(u<=0)
   {
-    if(SSL_get_error(x->ssl,u)!=SSL_ERROR_WANT_WRITE)
+    int e=SSL_get_error(x->ssl,u);
+
+    if(e!=SSL_ERROR_WANT_READ&&e!=SSL_ERROR_WANT_WRITE)
     {
-      x->wr=-1;return;
+      printf("u: %d, err: %d\n",u,e); // SSL_ERROR_SYSCALL 5
+      close_socket(x);return; // close? AI says yes.
     };
 
     u=0;
-  };
+  }else{printf("Server Write OK\n");}  // TEMP
 
   if(l-u>0&&x->wr==0)
   {
@@ -206,28 +226,6 @@ static int setup_sock(unsigned int *z,unsigned short p)
   bind(s,(struct sockaddr*)&q,sizeof(q));listen(s,SOMAXCONN);
 
   return s;
-};
-
-// Close Socket;
-static inline void close_socket(ud *x)
-{
-  printf("Start Close: %d\n",x->fd);close(x->fd);
-
-  if(x->ssl!=0)
-  {
-    SSL_free(x->ssl);x->ssl=0;
-  };
-
-  if((long)x->d>3)
-  {
-    close_func(x);
-  };
-  
-
-  x->d=0;printf("Closed: %d\n",x->fd);
-
-  x->d=atomic_exchange(&sz,x);
-  //free(x);// temp
 };
 
 // Destroy Server;
@@ -416,7 +414,7 @@ static void *thread(void *j)
         {
           close(s);
         }
-        else
+        else if(x->ssl!=0)
         {
           close_socket(x);
         };
@@ -460,7 +458,8 @@ static void *thread(void *j)
             x->ssl=SSL_new(ssl);SSL_set_fd(x->ssl,s);x->fd=s;x->d=(char*)1;
 
             // Register Event;
-            EV_SET(&z,s,EVFILT_READ,EV_ADD,0,0,x);
+            //EV_SET(&z,s,EVFILT_READ,EV_ADD,0,0,x);
+            EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_CLEAR,0,0,x); // NEW
             
             #if __APPLE__
               o=((o+1)%(nt-1))+1;
@@ -508,21 +507,45 @@ static void *thread(void *j)
             }
             else
             {
-              x->d=(char*)3;printf("SSL Done\n");
+              x->d=(char*)3;printf("New Server Connection\n");
             };
           }
           default:
           {
             if(e[i].filter!=EVFILT_WRITE)
             {
-              int u=SSL_read(x->ssl,q,PACKET_SIZE);printf("Read %d\n",u);
+              /*int u=SSL_read(x->ssl,q,PACKET_SIZE);printf("Read %d\n",u);
 
               // Seems to work fine even with atomics, so keep them..
+              // use EV_CLEAR! read till egain
+              //EAGAIN
 
               // Process;
               if(u>0)
               {
                 recv_func(x,q,u);printf("Send Done\n");
+              };*/
+
+              while(x->ssl!=0)
+              {
+                int u=SSL_read(x->ssl,q,PACKET_SIZE);printf("Read %d\n",u);
+
+                // Process;
+                if(u>0)
+                {
+                  recv_func(x,q,u);break;
+                }
+                else
+                {
+                  int e=SSL_get_error(x->ssl,u);
+
+                  if(e!=SSL_ERROR_WANT_READ&&e!=SSL_ERROR_WANT_WRITE)
+                  {
+                    close_socket(x);
+                  };
+
+                  break;
+                };
               };
             }
             else

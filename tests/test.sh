@@ -1,7 +1,4 @@
-#gcc test_client.c -o test -O3 -lssl && gcc test_server.c -o server -O3 -lssl -lcrypto && ./server && rm test && rm server
 
-#gcc test_client_new.c -o test -O3 -lssl && gcc test_server.c -o server -O3 -lssl -lcrypto && ./server && rm test && rm server
-# add if linux use -libkqueue else do nothing
 
 # work out dispatch example and archive mac.
 gcc test_server.c -o server -O3 -lssl -lcrypto

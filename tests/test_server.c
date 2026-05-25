@@ -21,7 +21,7 @@ typedef struct ws_client
 // Server Router;
 static inline void client_recv(ud *t,void *a,int u)
 {
-  char *vz=(char*)a,*vf=vz+1024;
+  unsigned char *vz=(unsigned char*)a,*vf=vz+1024;
 
   if(*vz=='G')
   {
@@ -51,21 +51,20 @@ static inline void client_recv(ud *t,void *a,int u)
     else
     {
       // Send GET Response;
-      printf("Handled!\n");
-      server_send(t,h,sizeof(h)-1);close_socket(t);
+      server_send(t,h,sizeof(h)-1);//printf("RES Send!\n");
     };
   }
-  else if(0) // disabled
+  else //if(0) // disabled
   {
     // Mirror WebSocket Message To Client;
-    char *p=vz;long int l,s;
+    unsigned char *p=vz,h;long int l,s;
 
     // Process WebSocket Frame;
     cl *j=t->d;
 
     if(j->ws_cache==0)
     {
-      char *p=vz,h;unsigned long l;ws_header(&p,&l);h=(p-vz);
+      unsigned long l;ws_header(&p,&l);h=(p-vz);
 
       // Allocate Message Cache;
       if(l+h>u)
@@ -111,8 +110,7 @@ static inline void client_recv(ud *t,void *a,int u)
     printf("u length: %d\n",u);
     printf("Server WSREAD LENGTH: %ld\n",l); // 16384*4+11319=76855
 
-    ws_set(&p,l);//s=SSL_write(q,p,l+p-vq);
-    server_send(t,p,l+p-vz);
+    ws_set(&p,l);server_send(t,p,l+p-vz);
 
     atomic_fetch_add(&z,1);
   };
@@ -121,7 +119,7 @@ static inline void client_recv(ud *t,void *a,int u)
 // Server Close Handler;
 static void client_close(ud *t)
 {
-  //cl *j=t->d;free(j->ws_cache);printf("Close Handler: %d\n",t->fd);
+  // Not Used;
 };
 
 // Server Pressure Release (Socket Writable);
