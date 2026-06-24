@@ -26,14 +26,22 @@
 #define THREAD_CONC_CLIENTS 2048
 #define PACKET_SIZE 16384
 
-#define REDIR_HTTP 1 // remove
-#define URL "https://localhost" // remove, move to redir example
+#define WR_QUEUE 8
+
+#if WR_QUEUE > 0
+typedef struct cx
+{
+  const void *b;
+  unsigned char next;
+  unsigned int l;
+} cx;
+#endif
 
 
-
-// fix tester ws_send_mask and finish ws_test!
+// finish ws_test! implement large ws send!
+// implement write queue in server but keep optional.
 // test backpressure.
-// Look into fast http-redirection.
+
 // get libkqueue to work under linux
 // async image loading demo for mac and linux.
 // 
@@ -41,11 +49,17 @@
 // Define Globals (Sockets, Queue, SSL, Socket Struct);
 unsigned int nr,nt;pthread_t *nu;SSL_CTX *ssl;X509 *cert;EVP_PKEY *key;
 
-typedef struct ux
+typedef struct
 {
-  int fd,wr;
+  int fd;
   SSL *ssl;
   void *d;
+
+  #if WR_QUEUE > 0
+  unsigned char wr_head,wr_tail;
+  cx wr_list[WR_QUEUE];
+  unsigned int wr_pos;
+  #endif
 
   #if __linux__
   struct io_uring *r;
@@ -66,12 +80,101 @@ typedef struct
   #endif
 } td;
 
-void (*recv_func)(ud*,void*,int),(*drain_func)(ud*),(*close_func)(ud*);
+void (*recv_func)(ud*,void*,int),(*wr_func)(ud*,int),(*close_func)(ud*);
 
 _Atomic (ud*)sz;ud *sl;td *ti;
 
+#if WR_QUEUE > 1
+void socket_send(ud *x,const void *b,unsigned int l);
+
+// Send Safely (Write Queue);
+static inline int server_send(ud *x,const void *b,unsigned int l)
+{
+  //cl *j=x->d;
+  cx *s=x->wr_list,*a;printf("Send Start\n");
+
+  char n=x->wr_head;
+  //cx *z=s+n;
+  // ,n=(s+h)->next
+
+  // Queue Full?;
+  if(n==-1)
+  {
+    return 1;
+  };
+
+  // Add To List;
+  a=(s+n);a->b=b;a->l=l;//a->f=f;
+  printf("len %u\n",a->l);
+  
+  // j->head should be first free entry! instead of last. DONE.
+  x->wr_head=a->next;
+  
+  // Send;
+  if(n==x->wr_tail) // OK.
+  {
+    printf("RealSend %d %d\n",x->wr_tail,x->wr_head);socket_send(x,b,l); // OK???
+  }
+  else
+  {
+    printf("%d %d\n",x->wr_head,x->wr_tail);
+  };
+
+  return 0;
+};
+
+// Server Write Callback & Drained;
+static void write_queue(ud *x,int u)
+{
+  cx s=*(x->wr_list+x->wr_tail);char n=x->wr_tail;
+
+  if(u>=0)
+  {
+    x->wr_pos+=u;
+
+    printf("Write: %u-%u, %d %d\n",x->wr_pos,s.l,(char)(x->wr_tail),(char)(x->wr_head));
+
+    // Finished Active?;
+    if(x->wr_pos>=s.l)
+    {
+      // Write Callback;
+      wr_func(x,u);
+
+      // Free?;
+      //if(s.f){free(s.b);s.b=0;};
+
+      x->wr_pos=0;
+
+      // Queue Not Empty?;
+      if(s.next!=x->wr_head)
+      {
+        // Move Free To Head;
+        char z=s.next;s.next=x->wr_head;x->wr_head=n;
+
+        x->wr_tail=z;
+        //s=*(x->wr_list+z); // Fix?
+        s=*(x->wr_list+z);
+
+        // Send Next;
+        socket_send(x,s.b,s.l);
+      }
+      else
+      {
+        // Move Free To Head;
+        s.next=x->wr_head;x->wr_head=n;
+      };
+    };
+  }
+  else
+  {
+    // Partial Write (Pressure Drained);
+    socket_send(x,s.b+x->wr_pos,s.l-x->wr_pos);
+  };
+};
+#endif
+
 // Close Socket;
-static inline void close_socket(ud *x)
+void close_socket(ud *x)
 {
   close(x->fd);
 
@@ -90,7 +193,9 @@ static inline void close_socket(ud *x)
 
 // Define Queue & IO Functions, Variables;
 #ifndef __linux__
-static void server_send(ud *x,const void *b,unsigned int l)
+#include <openssl/err.h> // TEMP
+
+void socket_send(ud *x,const void *b,unsigned int l)
 {
   int u=SSL_write(x->ssl,b,l);
 
@@ -100,19 +205,28 @@ static void server_send(ud *x,const void *b,unsigned int l)
 
     if(e!=SSL_ERROR_WANT_READ&&e!=SSL_ERROR_WANT_WRITE)
     {
-      printf("u: %d, err: %d\n",u,e); // SSL_ERROR_SYSCALL 5
-      close_socket(x);return; // close? AI says yes.
+      printf("Closing Client: u: %d, err: %d\n",u,e);ERR_print_errors_fp(stderr); // SSL_ERROR_SYSCALL 5
+      printf("Syscall error: %s (errno: %d)\n", strerror(errno), errno); // errno means client EOF!
+      close_socket(x);return;
     };
 
     u=0;
-  }else{printf("Server Write OK\n");}  // TEMP
+  };//printf("Server Write OK %d\n",l-u>0);  // TEMP
 
-  if(l-u>0&&x->wr==0)
+  // Register Write Ready;
+  if(l-u>0)
   {
-    struct kevent k;EV_SET(&k,x->fd,EVFILT_WRITE,EV_ADD|EV_ONESHOT,0,0,x);x->wr=l-u;
+    struct kevent k;EV_SET(&k,x->fd,EVFILT_WRITE,EV_ADD|EV_ONESHOT,0,0,x);//x->wr=1;
 
-    kevent(x->kq,&k,1,0,0,0);printf("Partial Send: %d/%d\n",u,l);
+    kevent(x->kq,&k,1,0,0,0);
   };
+
+  // Write Callback;
+  #if WR_QUEUE > 0
+  write_queue(x,u); // perhaps do this in main loop at write event receive?.
+  #else
+  wr_func(x,u);
+  #endif
 };
 #else
 const unsigned long tm=15UL<<60,am=(~tm);
@@ -139,7 +253,7 @@ static inline void reg_out(struct io_uring *r,ud *s,unsigned long d)
   io_uring_sqe_set_data64(e,d);io_uring_submit(r);
 };
 
-static void server_send(ud *s,const void *b,unsigned int l)
+void socket_send(ud *s,const void *b,unsigned int l)
 {
   struct io_uring_sqe *e=io_uring_get_sqe(s->r);io_uring_prep_send(e,s->fd,b,l,0);s->wr=l;
 
@@ -176,7 +290,7 @@ static inline void mem_copy(void *d,const void *i,const void *e)
 };
 
 // Load Certificates;
-static int load_cert(const char *i,const char *z)
+int load_cert(const char *i,const char *z)
 {
   BIO *b=BIO_new_file(i,"r");if(!b){return 1;};
 
@@ -200,7 +314,7 @@ static int load_cert(const char *i,const char *z)
 };
 
 // Setup Socket;
-static int setup_sock(unsigned int *z,unsigned short p)
+static inline int setup_sock(unsigned int *z,unsigned short p)
 {
   #if __APPLE__
   int s=socket(AF_INET6,SOCK_STREAM,0),o=1;fcntl(s,F_SETFL,O_NONBLOCK);
@@ -229,7 +343,7 @@ static int setup_sock(unsigned int *z,unsigned short p)
 };
 
 // Destroy Server;
-static void destroy_server()
+void destroy_server()
 {
   unsigned int x=0;
 
@@ -257,46 +371,6 @@ static void destroy_server()
   #endif
 
   free(sl);SSL_CTX_free(ssl);free(nu);free(ti);
-};
-
-// Redirect HTTP Requests;
-static void *http_redirect(void *p)
-{
-  // Initialize Variables;
-  struct sockaddr_in6 u;unsigned int f=(long)p,s,q=sizeof(u);
-  
-  // Prepare Output;
-  const char x[]="\r\n\r\n";char r[512]="HTTP/1.1 301\r\nContent-Length: 0\r\nLocation: ",*a=r+42+sizeof(URL);
-  
-  mem_copy(r+43,URL,(char*)URL+sizeof(URL)-1);
-
-  // Process Incoming Data;
-  while(1)
-  {
-    printf("thr\n");
-    s=accept(f,(struct sockaddr*)&u,&q);
-
-    if(s>>31==0)
-    {
-      printf("thr\n");
-      // HTTP Redirect;
-      char *z=a,*e=a+256;(void)!read(s,a,256);
-
-      while(z<e&&*z!='/')
-      {
-        z+=1;
-      };
-
-      while(z<e&&*z!=' ')
-      { 
-        *a=*z;z+=1;a+=1;
-      };
-
-      mem_copy(a,x,x+4);a+=4;
-      
-      (void)!write(s,r,a-r);close(s);
-    };
-  };
 };
 
 // Cleanup Thread;
@@ -452,13 +526,11 @@ static void *thread(void *j)
               };
             }
             while(!atomic_compare_exchange_weak(&sz,&x,x->d));
-            //x=calloc(1,sizeof(ud)); // temp
 
             // Get SSL & Fill Struct;
             x->ssl=SSL_new(ssl);SSL_set_fd(x->ssl,s);x->fd=s;x->d=(char*)1;
 
             // Register Event;
-            //EV_SET(&z,s,EVFILT_READ,EV_ADD,0,0,x);
             EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_CLEAR,0,0,x); // NEW
             
             #if __APPLE__
@@ -507,33 +579,33 @@ static void *thread(void *j)
             }
             else
             {
-              x->d=(char*)3;printf("New Server Connection\n");
+              x->d=(char*)3;
+
+              #if WR_QUEUE > 0
+              // Init Linked List;
+              int g=0;cx *s=x->wr_list; // also ADD for io_uring!
+
+              while(g<WR_QUEUE-1)
+              {
+                s->next=g+1;s+=1;printf("Entry: %d, Next: %d\n",g,g+1);g+=1; // 0 to 7, last -1
+              };
+
+              s->next=-1;
+              #endif
             };
           }
           default:
           {
             if(e[i].filter!=EVFILT_WRITE)
             {
-              /*int u=SSL_read(x->ssl,q,PACKET_SIZE);printf("Read %d\n",u);
-
-              // Seems to work fine even with atomics, so keep them..
-              // use EV_CLEAR! read till egain
-              //EAGAIN
-
-              // Process;
-              if(u>0)
-              {
-                recv_func(x,q,u);printf("Send Done\n");
-              };*/
-
               while(x->ssl!=0)
               {
-                int u=SSL_read(x->ssl,q,PACKET_SIZE);printf("Read %d\n",u);
+                int u=SSL_read(x->ssl,q,PACKET_SIZE);
 
                 // Process;
                 if(u>0)
                 {
-                  recv_func(x,q,u);break;
+                  recv_func(x,q,u);
                 }
                 else
                 {
@@ -550,8 +622,14 @@ static void *thread(void *j)
             }
             else
             {
-              // Backpressure Handler (Drained);
-              drain_func(x);x->wr=0;
+              // Write Ready (Drained Pressure);
+              //x->wr=-1;wr_func(x,-1);if(x->wr<0){x->wr=0;}; // was (x,-1)
+
+              #if WR_QUEUE > 0
+              write_queue(x,-1);
+              #else
+              wr_func(x,-1);
+              #endif
             };
 
             break;
@@ -628,7 +706,20 @@ static void *thread(void *j)
 
         if(h==1)
         {
+          // Handshake Done;
           reg_read(&r,x);
+
+          #if WR_QUEUE > 0
+          // Init Linked List;
+          int g=0;cx *s=x->wr_list;
+
+          while(g<WR_QUEUE-1)
+          {
+            s->next=g+1;s+=1;printf("Entry: %d, Next: %d\n",g,g+1);g+=1; // 0 to 7, last -1
+          };
+          
+          s->next=-1;
+          #endif
         }
         else
         {
@@ -665,26 +756,38 @@ static void *thread(void *j)
 
         // Recycle Read Buffer;
         io_uring_buf_ring_add(br,a,PACKET_SIZE,f,io_uring_buf_ring_mask(THREAD_CONC_CLIENTS),0);
+        
         io_uring_buf_ring_advance(br,1);
 
         break;
       }
       case 2:
       {
-        if(x->wr-u>0) // check
+        // Register Write Ready;
+        if(x->wr-u>0)
         {
-          reg_out(&r,x,((unsigned long)x|3UL<<60));printf("Partial Write: %d/%d\n",u,x->wr);
-          x->wr-=u;
+          reg_out(&r,x,((unsigned long)x|3UL<<60));x->wr=1;printf("Partial Write: %d, %d.\n",u,x->wr);
         };
 
-        printf("Write Success: %d\n",u);
+        // Write Callback;
+        #if WR_QUEUE > 0
+        WR_QUEUE(x,u);
+        #else
+        wr_func(x,u);
+        #endif
+        //wr_func(x,u);
 
         break;
       }
-      case 3: 
+      case 3:
       {
-        printf("Back-Pressure Drained!\n");
-        drain_func(x);
+        // Write Ready (Pressure Drained);
+        //x->wr=-1;wr_func(x,-1);if(x->wr<0){x->wr=0;};
+        #if WR_QUEUE > 0
+        WR_QUEUE(x,-1);
+        #else
+        wr_func(x,-1);
+        #endif
 
         break;
       }
@@ -697,8 +800,12 @@ static void *thread(void *j)
 };
 
 // Start Server;
-static inline int start_server(unsigned int *z,unsigned short p,void(*v)(ud*,void*,int),void(*b)(ud*),void(*n)(ud*))
+// can use __weak function links with extern instead.. also add ssl init function call.
+int start_server(unsigned int *z,unsigned short p,void(*v)(ud*,void*,int),void(*b)(ud*,int),void(*n)(ud*))
 {
+  // Ignore Broken Pipe (Crucial);
+  signal(SIGPIPE,SIG_IGN);
+
   // Increase RAM Pin Limit;
   if(setrlimit(RLIMIT_MEMLOCK,&(struct rlimit){.rlim_cur=RLIM_INFINITY,.rlim_max=RLIM_INFINITY})!=0) 
   {
@@ -706,7 +813,7 @@ static inline int start_server(unsigned int *z,unsigned short p,void(*v)(ud*,voi
   };
 
   // Setup Server Functions;
-  int i=sysconf(_SC_NPROCESSORS_ONLN);nu=malloc(i*sizeof(pthread_t));recv_func=v;drain_func=b;close_func=n;
+  int i=sysconf(_SC_NPROCESSORS_ONLN);nu=malloc(i*sizeof(pthread_t));recv_func=v;wr_func=b;close_func=n;
 
   if(nu==0||i<2)
   {
@@ -730,32 +837,14 @@ static inline int start_server(unsigned int *z,unsigned short p,void(*v)(ud*,voi
 
   while(sz<se)
   {
-    //sz->next=sz+1;sz+=1;
-    sz->d=(void*)(sz+1);
-    //sz+=1;
-    atomic_fetch_add(&sz,1);
+    sz->d=(void*)(sz+1);atomic_fetch_add(&sz,1);
   };
 
   sz=sl;
 
-  // Setup Event Queues;
-  #if __APPLE__
-  //int ns=setup_sock(z,p);
-  /*ep=kqueue();
-  
-  ud x={0};EV_SET(&kl,ns,EVFILT_READ,EV_ADD|EV_DISPATCH,0,0,&x);
-
-  if(kevent(ep,&kl,1,0,0,0)<0)
-  {
-    destroy_server();return 1; // not ok..
-  };
-
-  EV_SET(&kl,ns,EVFILT_READ,EV_ENABLE|EV_DISPATCH,0,0,&x);*/
-  #endif
-
+  // Spawn Virtual Threads (As Many As Physical);
   ti=malloc(i*sizeof(td));td *q=ti;
 
-  // Spawn Virtual Threads (As Many As Physical);
   while(nt<i)
   {
     q->s=setup_sock(z,p);pthread_create(&nu[nt],0,thread,q);
@@ -775,9 +864,6 @@ static inline int start_server(unsigned int *z,unsigned short p,void(*v)(ud*,voi
     pthread_create(&nu[nt],0,http_redirect,(char*)(long)nr);nt+=1;
   };
   #endif*/
-
-  // Ignore Broken Pipe;
-  signal(SIGPIPE,SIG_IGN);
 
   return 0;
 };

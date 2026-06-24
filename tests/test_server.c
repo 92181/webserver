@@ -9,19 +9,44 @@
 #include "../src/server.c"
 #include "../src/ws.h"
 
-unsigned int i[4];atomic_int z=0;const char h[]="HTTP/1.1 200\r\n\r\nHello World";
+#define WRITE_QUEUE 8
+#define TEST_WRITE_QUEUE 1
 
-typedef struct ws_client
+unsigned int i[4];atomic_int z=0;const char h[]="HTTP/1.1 200\r\nContent-Length: 11\r\n\r\nHello World";
+
+typedef struct cl
 {
+  unsigned char *recv,*recv_p;
+  unsigned long recv_len;
+   
   unsigned long id;
-  //unsigned int ws_op; // to cache pos!
-  char *ws_cache,*ws_ps,*ws_pe;
 } cl;
 
 // Server Router;
-static inline void client_recv(ud *t,void *a,int u)
+static inline void recv_handler(ud *t,void *a,int u)
 {
   unsigned char *vz=(unsigned char*)a,*vf=vz+1024;
+
+  if(t->d==(char*)3)
+  {
+    // Allocate Client Memory;
+    t->d=calloc(1,sizeof(cl));if(t->d==0){close_socket(t);return;};
+
+    // Allocate Send Buffer;
+    //cl *j=t->d;j->wr_list=malloc(sizeof(cx)*8);if(j->wr_list==0){close_socket(t);return;};//j->wr_max=8;
+
+    // Init Linked List;
+    /*cl *j=t->d;cx *s=j->wr_list;
+
+    int g=0;
+    while(g<WRITE_QUEUE-1)
+    {
+      s->next=g+1;s+=1;printf("Entry: %d, Next: %d\n",g,g+1);g+=1; // 0 to 7, last -1
+    };
+    s->next=-1;
+    */
+
+  };
 
   if(*vz=='G')
   {
@@ -38,94 +63,108 @@ static inline void client_recv(ud *t,void *a,int u)
 
       vz+=5;
 
-      // Allocate Client Memory;
-      t->d=malloc(128);
-      
       // Hash Key & Send Upgrade Response;
       unsigned char r[]="HTTP/1.1 101\r\nupgrade: websocket\r\nConnection: upgrade\r\nSec-WebSocket-Accept: xxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n\r\n";
 
-      char *h=r+sizeof(r)-33;ws_key((char*)vz,&h);*(r+sizeof(r)-5)='\r';
+      unsigned char *h=r+sizeof(r)-33;ws_key(vz,&h);*(r+sizeof(r)-5)='\r';printf("Server Upgrade\n");
 
       server_send(t,r,sizeof(r)-1);
     }
     else
     {
-      // Send GET Response;
-      server_send(t,h,sizeof(h)-1);//printf("RES Send!\n");
+      // Send HTTP/GET;
+      server_send(t,h,sizeof(h)-1);
     };
   }
-  else //if(0) // disabled
+  else
   {
-    // Mirror WebSocket Message To Client;
-    unsigned char *p=vz,h;long int l,s;
+    unsigned char *p=vz,h;unsigned long l;
 
     // Process WebSocket Frame;
-    cl *j=t->d;
+    cl *j=t->d;//printf("client ws msg received %u\n",u);
 
-    if(j->ws_cache==0)
+    if(j->recv==0)
     {
-      unsigned long l;ws_header(&p,&l);h=(p-vz);
+      ws_header(&p,&l);h=(p-vz);printf("h: %d\n",h);
 
-      // Allocate Message Cache;
-      if(l+h>u)
-      {
-        j->ws_cache=malloc(l);mem_copy(j->ws_cache,p,p+u-h);
+      // Allocate Receive Cache;
+      j->recv=malloc(l);if(j->recv==0){close_socket(t);return;};j->recv_p=j->recv+u-h;j->recv_len=l;
+      
+      if(u-h>l){u=l+h;};mem_copy(j->recv,p,p+u-h);
 
-        j->ws_ps=j->ws_cache+u-h;j->ws_pe=j->ws_cache+l;
-      };
+      printf("j->recv alloc %lu, copied: %d %d\n",(long)(j->recv),u-h,h);
     }
     else
     {
       // Add Chunk To Cache;
-      mem_copy(j->ws_ps,vz,vz+u);j->ws_ps+=u;
+      unsigned long d=j->recv_p-j->recv;
 
-      // Message Complete;
-      if(j->ws_ps==j->ws_pe)
+      if(d<j->recv_len)
       {
-        unsigned long l=(j->ws_pe-j->ws_cache);ws_unmask(j->ws_cache,l);
+        if(u>j->recv_len-d){u=j->recv_len-d;};mem_copy(j->recv_p,vz,vz+u);printf("Add to Cache\n");
+        
+        j->recv_p+=u;
+      };
+    };
 
-        // print decrypted content here
-        printf("Content:\n");
-        char *ii=j->ws_cache,*v=ii+l;while(ii<v)
-        {
-          printf("%c",*ii);ii+=1;
-        };
-        printf("\n");
+    // Receive Complete?;
+    if(j->recv_p>=j->recv+j->recv_len)
+    {
+      printf("%d %d %d %d %d\n",(unsigned char)*(j->recv),(unsigned char)*(j->recv+1),(unsigned char)*(j->recv+2),(unsigned char)*(j->recv+3),(unsigned char)*(j->recv+4));
+      ws_unmask(j->recv,j->recv_len);l=(j->recv_len-4);
 
-        // Medium MSG;
-        unsigned char g[2048],*y=g,d[]="Hello Client! Hail To Victory!";
-        mem_copy(g+10,d,d+sizeof(d)-1);ws_set(&y,sizeof(d)-1);
+      // Check Content ('Random' Sequence);
+      unsigned char *i=j->recv+4,*z=i,*e=i+l,s=85;
 
-        //server_send(t,y,sizeof(d)-1+(g+10-y));
+      while(i<e)
+      {
+        s>>=1;if(s&1){s^=184;};//printf("%d %d\n",(int)(unsigned char)*i,(int)(unsigned char)s);
 
-        // Free;
-        free(j->ws_cache);j->ws_cache=0;
+        if(*i!=s){break;};i+=1;
       };
 
-      printf("Chunk::Consumed: %d\n",u);
+      if(i==e)
+      {
+        // Mirror Message (-> Client);
+        printf("Mirror To Client %lu\n",l);server_send(t,z,l);
+      }
+      else
+      {
+        //close_socket(t);atomic_fetch_add(&z,1); // should close, testing only.
+        
+        printf("content no match %lu %lu\n",(long)i,(long)e); 
+
+
+      };
     };
-    
-    // fix wsread length first. seems wrong.
-
-    printf("u length: %d\n",u);
-    printf("Server WSREAD LENGTH: %ld\n",l); // 16384*4+11319=76855
-
-    ws_set(&p,l);server_send(t,p,l+p-vz);
-
-    atomic_fetch_add(&z,1);
   };
 };
 
 // Server Close Handler;
-static void client_close(ud *t)
+static void close_handler(ud *t)
 {
-  // Not Used;
+  cl *j=t->d;
+
+  if(j->recv!=0)
+  {
+    free(j->recv);
+  };
+
+  free(t->d);
 };
 
-// Server Pressure Release (Socket Writable);
-static void client_drain(ud *t)
+// Write & Drained Callback;
+static void write_handler(ud *t,int u)
 {
-  printf("Drained -- Write: %d.\n",t->wr);
+  // Get Current Buffer;
+  cl *j=t->d;cx *s=(t->wr_list+t->wr_tail);
+
+  if(j->recv==s->b-4)
+  {
+    free(j->recv);j->recv=0;
+    
+    printf("RECV FREE\n");
+  };
 };
 
 // Start Server;
@@ -138,11 +177,10 @@ int main()
   };
 
   // Start Server On Port;
-  start_server(i,443,client_recv,client_drain,client_close);
+  start_server(i,443,recv_handler,write_handler,close_handler);
 
   // Run Tests
-  sleep(1);system("./test");printf("✅ Server Terminating, Back-pressure: %d, ?: %d.\n",z,1);
-  //sleep(1000);
+  sleep(1);system("./test");printf("✅ Server Terminating.\n");
 
   // Return Success;
   destroy_server();

@@ -32,6 +32,13 @@ static void client_recv(ud *t,void *a,int u)
   }
   else if(*vz!='P')
   {
+    // Rate Limit (Optional);
+    if(0>1)
+    {
+      close_socket(t);
+    };
+
+
     // Process WebSocket Frame;
     /*cl *j=t->d;
 

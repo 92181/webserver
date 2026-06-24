@@ -1,10 +1,12 @@
-#include "../../server.c"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include "../../src/server.c"
+
+#define URL "https://localhost"
 
 // gcc main.c -o main -O3 -lssl -lcrypto, https://[::1]:3000/
 
@@ -14,6 +16,46 @@ char vq[16384],*vz,*vw,*vy,*gi="index.html",*gu;
 unsigned int gl,gj=0,i[4],s,a,f;
 
 struct stat d;
+
+// Redirect HTTP Requests;
+static void *http_redirect(void *p)
+{
+  // Initialize Variables;
+  struct sockaddr_in6 u;unsigned int f=(long)p,s,q=sizeof(u);
+  
+  // Prepare Output;
+  const char x[]="\r\n\r\n";char r[512]="HTTP/1.1 301\r\nContent-Length: 0\r\nLocation: ",*a=r+42+sizeof(URL);
+  
+  mem_copy(r+43,URL,(char*)URL+sizeof(URL)-1);
+
+  // Process Incoming Data;
+  while(1)
+  {
+    printf("thr\n");
+    s=accept(f,(struct sockaddr*)&u,&q);
+
+    if(s>>31==0)
+    {
+      printf("thr\n");
+      // HTTP Redirect;
+      char *z=a,*e=a+256;(void)!read(s,a,256);
+
+      while(z<e&&*z!='/')
+      {
+        z+=1;
+      };
+
+      while(z<e&&*z!=' ')
+      { 
+        *a=*z;z+=1;a+=1;
+      };
+
+      mem_copy(a,x,x+4);a+=4;
+      
+      (void)!write(s,r,a-r);close(s);
+    };
+  };
+};
 
 // String Length Function;
 static inline unsigned long int srl(char *p)
@@ -207,11 +249,13 @@ int main(int e,char **r)
   char t[]="./public";trd(t,sizeof(t));
 
   // Load Certificates;
-  f=open("cert.pem",0);if(f>>31){write(1,qe,sizeof(qe));return 1;};fstat(f,&d);s=d.st_size;b=malloc(s);read(f,b,s);close(f);
-  f=open("key.pem",0);if(f>>31){write(1,qe,sizeof(qe));return 1;};fstat(f,&d);a=d.st_size;c=malloc(a);read(f,c,a);close(f);
-
+  if(load_cert("../src/cert.pem","../src/key.pem")!=0)
+  {
+    return 1;
+  };
+  
   // Start Server On Port 3000;
-  *(i+3)=16777216;insrv(i,3000,router,b,s,c,a);free(b);free(c);pthread_join(*nu,0);
+  *(i+3)=16777216;start_server(i,3000,router,b,s,c,a);free(b);free(c);pthread_join(*nu,0);
 
   // Return Success;
   free(u);free(gh);desrv();return 0;

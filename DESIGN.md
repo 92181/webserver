@@ -8,5 +8,5 @@ As we have multiple threads, the work needs to get distributed between them, on 
 # Async File Loading
 For MacOS the standard is the GCD (Dispatch API), aio_read is not supported for kqueue atleast. Luckily FreeBSD also supports it through a simple compatibility wrapper. GCD is a little weird as it occupies a thread, only to use it in a blocking manner, sadly a superior alternative such as io_uring will 'never' be implemented.
 
-# Backpressure Handler
-A backpressure handler is exposed, for both kqueue and io_uring.
+# Buffers & Write/Backpressure Callback
+As we use HTTP/1.1 all writes are sequential (non-interleaved, linear). We use a buffer queue to write all outstanding data, this approuch seems the most efficient. It can be disabled by changing WR_QUEUE to 0. When the write queue is full the function will return 1.

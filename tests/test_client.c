@@ -1,27 +1,35 @@
 #include <stdio.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <openssl/ssl.h>
+#include <stdlib.h>
 #include <unistd.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <sys/socket.h>
 #include <pthread.h>
-#include <time.h>
 #include <sys/event.h>
-#include "../src/ws.h"
+#include <fcntl.h>
+#include <netdb.h>
+#include <time.h>
 
-// make sure libkqueue is there
-  // -lkqueue
-  // kqueue lib compatible (use linux to write it!)
+#include "../src/ws.h"
 
 #define SERVER_IP "::1"
 #define SERVER_PORT "443"
-#define THREADS 32 // 1
 
-#define HTTP_LOAD_TIME 1400 // 14
+#define THREAD_CONNECTIONS 1
+#define HTTP_LOAD_TIME 0 // 14 (temp) to 0
 #define WS_LOAD_TIME 16
 
-struct addrinfo hi,*rs;pthread_t *t;
+// Define Globals;
+const unsigned long tm=15UL<<60,am=(~tm);int gg=0;struct addrinfo hi,*rs;pthread_t *nu;
 
-const char d[]="HTTP/1.1 200\r\nContent-Length: 1597\r\n\r\nGerman Car Fabrication (1900-2025)\n\n1901 - Benz launches the Velo, the first modest German automobile.  1902 - DMG's Mercedes 35-HP sets new speed standards.  Post-WWI, BMW pivots from aircraft engines to cars.\n"
+typedef struct cl
+{
+  SSL *ssl;
+  unsigned char state;
+  int fd,wr;
+} cl;
+
+const char d[]="\n\nGerman Car Fabrication (1900-2025)\n\n1901 - Benz launches the Velo, the first modest German automobile.  1902 - DMG's Mercedes 35-HP sets new speed standards.  Post-WWI, BMW pivots from aircraft engines to cars.\n"
   "1924 - Horch's 12/50 offers affordable refinement.  193 - Audi's Front pioneers front-wheel drive.  1937 - Volkswagen's Beetle (designed by Porsche) becomes the “people's car.”\n"
   "WWII forces factories to produce military hardware, but advances in alloy casting and aerodynamics emerge.\n"
   "1949 - Mercedes-Benz's 300 SL Gullwing debuts fuel injection; Porsche's 356 shows lightweight sports engineering.  The 1950s-60s “Wirtschaftswunder” fuels mass-production: VW's Microbus, Audi's safety-cell 100, BMW's driver-focused E30 3-Series.\n"
@@ -57,174 +65,327 @@ static inline void mem_copy(void *d,const void *i,const void *e)
   };
 };
 
-// Client WS Helper Function;
-static void ws_client_set()
+// Close Socket;
+static void close_socket(cl *m) // was cl **b,cl *m
 {
-
-  // fix ws tester client_send (add mask 18,52,86,120) (14 bytes total) (tester only)
+  printf("Client Close %d\n",m->fd);
+  
+  close(m->fd);SSL_free(m->ssl);free(m);
 };
 
-// HTTP Test Function;
-static void *http_test(void *j)
+// Client WS Send Function (Static Mask);
+static int ws_client_send(cl *x,unsigned char *b,unsigned long l) // cl was SSL *s
 {
-  char b[65536];unsigned int f=0,r=0;SSL_CTX *c=SSL_CTX_new(TLS_client_method());
+  unsigned char *i,*c=b+10,m[]={18,52,86,120};
+
+  if(l<126)
+  {
+    *(b+8)=(1<<7)+1;*(b+9)=l|1<<7;
+
+    i=b+8;
+  }
+  else if(l<65536)
+  {
+    *(b+6)=(1<<7)+1;*(b+7)=126|1<<7;
+
+    *(unsigned short*)(b+8)=*((unsigned char*)&l)<<8|*(((unsigned char*)&l)+1);
+
+    i=b+6;
+  }
+  else
+  {
+    *b=(1<<7)+1;*(b+1)=255;i=b;
+
+    unsigned char *x=(unsigned char*)&l,*k=b+2;x+=sizeof(long);
+
+    while(k<c)
+    {
+      x-=1;*k=*x;k+=1;
+    };
+  };
+
+  // Add Mask (4);
+  *(unsigned int*)c=*(unsigned int*)m;c+=sizeof(char)*4;
+
+  // Mask Data (B);
+  unsigned long z=0;
+
+  while(z<l)
+  {
+    *c=*c^m[z%4];c+=1;z+=1;
+  };
+
+  // Write Safe;
+  int u=SSL_write(x->ssl,i,l+14-(i-b)); // ok.
   
-  struct timespec ts,te;timespec_get(&ts,1);
+  printf("Client MSG Send %d\n",u);
+  
+  if(u<0)
+  {
+    int e=SSL_get_error(x->ssl,u);printf("u: %d, err: %d\n",u,e);ERR_print_errors_fp(stderr);
+
+    if(e!=SSL_ERROR_WANT_READ&&e!=SSL_ERROR_WANT_WRITE)
+    {
+      // might need to be adjusted for big writes eg, write again (just keep simple pos and length per socket nothing major).
+      close_socket(x);
+    };
+  };
+
+  return u;
+};
+
+// Processing Function;
+static void *thread(void *j)
+{
+  // Thread Setup;
+  struct kevent z,x,e;int r=kqueue(),k=0,v=0,i=0;unsigned char q[16384],b[77824]; // unsigned char b[77824]
+
+  SSL_CTX *ctx=SSL_CTX_new(TLS_client_method());
+
+  // Start;
+  struct timespec o,p;timespec_get(&o,1);
 
   while(1)
   {
-    // Check Time;
-    timespec_get(&te,1);
-
-    if(te.tv_sec-ts.tv_sec>HTTP_LOAD_TIME)
+    // Launch Sockets;
+    while(i<THREAD_CONNECTIONS)
     {
-      unsigned int *s=malloc(sizeof(unsigned int)*2);*s=r;*(s+1)=f;
+      int f=socket(rs->ai_family,rs->ai_socktype,rs->ai_protocol);printf("New Client: %d\n",f);
 
-      SSL_CTX_free(c);pthread_exit(s);
+      if(f<0)
+      {
+        continue;
+      }
+      else if(fcntl(f,F_SETFL,O_NONBLOCK)<0)
+      {
+        close(f);
+      };
+
+      SSL *ssl=SSL_new(ctx);SSL_set_fd(ssl,f);connect(f,rs->ai_addr,rs->ai_addrlen);
+
+      // Store Info (Linked List);
+      cl *m=calloc(1,sizeof(cl));
+      
+      m->fd=f;m->ssl=ssl;
+
+      // Register Socket Events;
+      EV_SET(&z,f,EVFILT_WRITE,EV_ADD|EV_ONESHOT,0,0,m);
+
+      if(kevent(r,&z,1,0,0,0)<0)
+      {
+        close_socket(m);
+      };
+
+      i+=1;
     };
 
-    // Create Socket;
-    int s=socket(rs->ai_family,rs->ai_socktype,0);
+    // Check Time;
+    timespec_get(&p,1);
 
-    SSL *ssl=SSL_new(c);SSL_set_fd(ssl,s);//printf("XX0\n");
-
-    if(connect(s,rs->ai_addr,rs->ai_addrlen)>=0)
+    if(p.tv_sec-o.tv_sec>HTTP_LOAD_TIME)
     {
-      if(SSL_connect(ssl)>0)
+      if(p.tv_sec-o.tv_sec>HTTP_LOAD_TIME+WS_LOAD_TIME)
       {
-        //printf("XX1\n");
-        // Send HTTP Request (GET);
-        const char s[]="GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";SSL_write(ssl,s,sizeof(s)-1);
+        // Save Statistics;
+        unsigned int *s=malloc(sizeof(int)*4);*s=k;*(s+1)=v;
 
-        // Check Response;
-        int x=SSL_read(ssl,b,sizeof(b));
-
-        if(x<24)
-        {
-          f+=1;
-        }
-        else
-        {
-          r+=1;
-        };
-
-        SSL_shutdown(ssl);
+        // Thread Cleanup;
+        SSL_CTX_free(ctx);close(r);pthread_exit(s);
       }
-      else
+      else if(!gg)
       {
-        SSL_free(ssl);close(s);f+=1;continue;
+        printf("\n\nSwitch\n\n"); // temp
+        gg=1; // switch
       };
+    };
+
+    // Wait;
+    if(kevent(r,0,0,&e,1,0)<0)
+    {
+      exit(1);
+    };
+
+    // Process;
+    unsigned long o=(long)e.udata;int s=e.ident;cl *m=(cl*)(o&am); // ok?
+
+    if(e.flags&(EV_EOF|EV_ERROR))
+    {
+      close_socket(m);i-=1;//printf("Closed from Ev_err %d %d\n",e.flags&EV_EOF,e.flags&EV_ERROR);ERR_print_errors_fp(stderr);
     }
     else
     {
-      SSL_free(ssl);close(s);f+=1;continue;
-    };
+      //printf("Client EV Code: %lu, Socket: %d, Max: %d, Event: %d\n",(o&tm)>>60,s,i,e.filter);
+      switch((o&tm)>>60)
+      {
+        case 0:
+        {
+          int u=SSL_connect(m->ssl);
 
-    SSL_free(ssl);close(s);
+          if(u==1)
+          {
+            // Register Read;
+            EV_SET(&x,s,EVFILT_READ,EV_ADD,0,0,(void*)((unsigned long)m|1UL<<60));
+            
+            if(kevent(r,&x,1,0,0,0)<0)
+            {
+              close_socket(m);i-=1;
+            };
+
+            if(!gg)
+            {
+              // Write HTTP;
+              const char t[]="GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";SSL_write(m->ssl,t,sizeof(t)-1);
+              printf("Write HTTP\n");
+            }
+            else
+            {
+              // Write WS;
+              const char t[]="GET /ws HTTP/1.1\r\nHost: localhost\r\nSec-WebSocket-Key: dwO8+1t9V6bheeWPWdC8mg==\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n";
+
+              SSL_write(m->ssl,t,sizeof(t)-1);printf("Client Upgrade Send\n");
+            };
+          }
+          else 
+          {
+            int e=SSL_get_error(m->ssl,u);
+
+            if(e==SSL_ERROR_WANT_READ)
+            {
+              EV_SET(&z,s,EVFILT_READ,EV_ADD|EV_ONESHOT,0,0,m);
+
+              if(kevent(r,&z,1,0,0,0)<0)
+              {
+                close_socket(m);i-=1;
+              };
+            }
+            else if(e==SSL_ERROR_WANT_WRITE)
+            {
+              EV_SET(&z,s,EVFILT_WRITE,EV_ADD|EV_ONESHOT,0,0,m);
+
+              if(kevent(r,&z,1,0,0,0)<0)
+              {
+                close_socket(m);i-=1;
+              };
+            }
+            else
+            {
+              close_socket(m);i-=1;
+            };
+          };
+
+          break;
+        }
+        case 1:
+        {
+          int u=SSL_read(m->ssl,q,sizeof(q));
+
+          if(u<=0)
+          {
+            int e=SSL_get_error(m->ssl,u);
+
+            if(e!=SSL_ERROR_WANT_READ&&e!=SSL_ERROR_WANT_WRITE)
+            {
+              close_socket(m);i-=1;printf("Closed from read_err\n");
+            };
+
+            break;
+          };
+          printf("Received: %d, From Server;",u);
+
+          if(*q=='H'&&*(q+9)=='2')
+          {
+            // Response HTTP;
+            q[u]=0;//printf("Received: %d, Content:\n%s\n",u,q);
+
+            close_socket(m);i-=1;
+          }
+          else
+          {
+            // Initialize Send Buffer ('Random' Sequence);
+            unsigned char *a=b+14,s=85;
+
+            while(a<b+sizeof(b))
+            {
+              s>>=1;if(s&1){s^=184;};
+
+              *a=s;a+=1;
+            };
+
+            // WS Upgrade;
+            if(m->state==0)
+            {
+              unsigned char *x=q;
+
+              // Check Match (T);
+              const unsigned char t[]="HTTP/1.1 101\r\nupgrade: websocket\r\nConnection: upgrade\r\nSec-WebSocket-Accept: fpKENP7NB/nR0atevrsq+XuWAis=\r\n\r\n",*y=t;
+
+              while(x<q+sizeof(t))
+              {
+                if(*y!=*x){break;};
+
+                x+=1;y+=1;
+              };
+
+              if(x>=q+sizeof(t)-1)
+              {
+                m->state=1;printf("WS Upgrade!\n");
+
+                // Send Message (96 Bytes);
+                if(ws_client_send(m,b,96)!=96){v+=1;};
+              }
+              else
+              {
+                v+=1;
+              };
+
+              break;
+            };
+            
+            if(m->state!=0)
+            {
+              printf("Received from server (ws msg): %d\n",u);
+
+              if(u==96)
+              {
+                // Send Message (1597 Bytes);
+                printf("Send Second! %d\n",(unsigned char)(*b));
+
+                if(ws_client_send(m,b,1597)!=1597){v+=1;};
+
+                m->state+=1;
+              }
+              else if(u==1597)
+              {
+                // Send Message (>65526 Bytes);
+                printf("Send Third!\n");
+
+                int uu=ws_client_send(m,b,69632);
+                //if(ws_client_send(m->ssl,b,69632)!=69632){v+=1;};
+                //close_socket(m);i-=1;printf("OK OK\n"); // TEMP;
+
+                m->state+=1;printf("OK %d\n",uu);
+              }
+              else
+              {
+                // Succes?;
+                if(u==69632){k+=1;}else{v+=1;};printf("Other %d\n",u);
+
+                close_socket(m);i-=1;
+              };
+            };
+          };
+
+          break;
+        }
+      };
+    };
   };
 
   return 0;
 };
 
-// Websocket Test Function;
-static void *ws_test(void *j)
+int main() 
 {
-  char b[77824],*u=b;unsigned int f=0,r=0;SSL_CTX *c=SSL_CTX_new(TLS_client_method());
-
-  // Create Socket;
-  int s=socket(rs->ai_family,rs->ai_socktype,0);
-
-  SSL *ssl=SSL_new(c);SSL_set_fd(ssl,s);
-
-  if(connect(s,rs->ai_addr,rs->ai_addrlen)>=0&&SSL_connect(ssl)>0)
-  {
-    // Send WS Upgrade Request (GET);
-    const char s[]="GET /ws HTTP/1.1\r\nHost: localhost\r\nSec-WebSocket-Key: dwO8+1t9V6bheeWPWdC8mg==\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
-      r[]="HTTP/1.1 101\r\nupgrade: websocket\r\nConnection: upgrade\r\nSec-WebSocket-Accept: fpKENP7NB/nR0atevrsq+XuWAis=\r\n\r\n",*q=r;
-    
-    SSL_write(ssl,s,sizeof(s));
-
-    // Print Response;
-    int x=SSL_read(ssl,b,sizeof(b)),p;
-
-    // Check Response (Match);
-    while(u<b+x)
-    {
-      if(*q!=*u)
-      {
-        break;
-      };
-
-      u+=1;q+=1;
-    };
-
-    // Message Test (102 Bytes);
-    //u=b;mem_copy(b+10,d,d+102);ws_set(&u,102);SSL_write(ssl,u,102+(b+10-u));printf("Written: %d\n",p); // Seems OK?
-
-    //int p=SSL_read(ssl,b,sizeof(b));
-    // CHECK RESPONSE SIZE (Should match!)
-
-    // Message Test (1597 Bytes);
-    //u=b;mem_copy(b+10,d,d+sizeof(d)-1);ws_set(&u,sizeof(d)-1);SSL_write(ssl,u,sizeof(d)-1+(b+10-u));printf("Written: %d\n",p); // Seems OK?
-  
-    // Message Test (>65526 Bytes);
-    char *o=b+10;u=b;
-    
-    while(o+sizeof(d)<b+sizeof(b))
-    {
-      mem_copy(o,d,d+sizeof(d)-1);o+=sizeof(d)-1;
-    };
-
-    // USE ws_client_set()
-    ws_set(&u,o-b+10);p=SSL_write(ssl,u,o-b);printf("Written: %d\n",p); // TEST
-
-    p=SSL_read(ssl,b,sizeof(b));
-
-    long int l;u=b;//ws_read(&u,&l);
-
-    printf("Received: %d\n",p);printf("Length: %ld\n",l);
-  }
-  else
-  {
-    SSL_free(ssl);close(s);printf("❌ WebSocket Handshake Failed\n");
-  };
-
-  struct timespec ts,te;timespec_get(&ts,1);
-
-  while(0) // 1
-  {
-    // Time Check;
-    int p;timespec_get(&te,1);
-
-    if(te.tv_sec-ts.tv_sec>WS_LOAD_TIME)
-    {
-      SSL_shutdown(ssl);SSL_free(ssl);close(s);SSL_CTX_free(c);
-
-      unsigned int *s=malloc(sizeof(unsigned int)*2);*s=r;*(s+1)=f;
-
-      pthread_exit(s); //if 0 failed altogether.. or something like that
-    };
-
-    // Message Loop;
-    u=b;mem_copy(b+10,d,d+sizeof(d)-1);ws_set(&u,sizeof(d)-1);p=SSL_write(ssl,u,sizeof(d)-1+(b+10-u)); // Ok?
-
-    p=SSL_read(ssl,b,sizeof(b));
-
-    if(p<(sizeof(d)/2))
-    {
-      f+=1;
-    }
-    else
-    {
-      r+=1;
-    };
-  };
-};
-
-int main(int a,char **p)
-{
-  unsigned int x=0,r=0,f=0,*q;char *j=0;t=malloc(THREADS*sizeof(pthread_t));
-
   // Retrieve Server Info;
   hi.ai_family=AF_UNSPEC;hi.ai_socktype=SOCK_STREAM;hi.ai_flags=AI_NUMERICHOST;
 
@@ -233,44 +394,35 @@ int main(int a,char **p)
     freeaddrinfo(rs);return 1;
   };
 
-  // Launch Threads (HTTP Test);
-  while(x<THREADS)
+  // Get CPU Info;
+  int i=sysconf(_SC_NPROCESSORS_ONLN);nu=malloc(i*sizeof(pthread_t));
+
+  if(nu==0)
   {
-    pthread_create(&t[x],0,http_test,j+x);x+=1;
+    return 1;
+  };
+
+  unsigned int x=0,r=0,f=0,*q;char *j=0;
+
+  // Launch Threads;
+  while(x<i)
+  {
+    pthread_create(&nu[x],0,thread,j+x);x+=1;
+
+    break; // temp
   };
 
   x=0;
 
-  while(x<THREADS)
+  while(x<i)
   {
-    pthread_join(*(t+x),(void**)&q);x+=1;
+    pthread_join(*(nu+x),(void**)&q);x+=1;
 
-    r+=*q;f+=*(q+1);free(q);
-  };
-  
-  printf("✅ HTTPS Test Passed, RPS: %d, Failed: %d.\n",(r/HTTP_LOAD_TIME),f);
-  
-  // Launch Threads (WebSocket Test);
-  /*x=0;f=0;r=0;
-
-  while(x<THREADS)
-  {
-    pthread_create(&t[x],0,ws_test,j+x);x+=1;
+    r+=*q;f+=*(q+1);free(q); // statistics...
   };
 
-  x=0;
+  printf("✅ HTTPS Tests, RPS: %d, Failed: %d.\n",(r/HTTP_LOAD_TIME),f);
+  printf("✅ WS Tests, RPS: %d, Failed: %d.\n",(r/HTTP_LOAD_TIME),f);
 
-  while(x<THREADS)
-  {
-    pthread_join(*(t+x),(void**)&q);x+=1;
-
-    r+=*q;f+=*(q+1);free(q);
-  };
-
-  printf("✅ Websocket Test Passed, RPS: %d, Failed: %d.\n",(r/WS_LOAD_TIME),f);*/ // te.tv_sec-ts.tv_sec,(1000000000-te.tv_nsec)+ts.tv_nsec      << MOVE TO BENCHMARK backup in b64?
-  
-  // Free;
-  freeaddrinfo(rs);
-  
   return 0;
 };

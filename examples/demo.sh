@@ -7,20 +7,20 @@ read -n 1 name
 stty echo
 
 case $name in
-    49) rg="Pressed 1"  ;; # works?
-    50) rg="Pressed 2" ;;
-    51) rg="Pressed 3" ;;
-    52) rg="Pressed 4" ;;
+    49) rg="router/io.c"  ;; # works?
+    50) rg="static/serve.c" ;;
+    51) rg="ws/ws.c" ;;
     *) exit 0 ;;
 esac
 
 echo $rg
 
 if [ "$(uname -s)" = "Linux" ]; then
-    modprobe tls && gcc main.c -o main -O3 -lssl -lcrypto -luring
+    modprobe tls && #gcc main.c -o main -O3 -lssl -lcrypto -luring
+    eval "gcc $rg -o main -O3 -lssl -lcrypto -luring"
 else
-    gcc main.c -o main -O3 -lssl -lcrypto
-    # eval "$arg -lm -lavformat -lavcodec -lavutil -framework AudioToolbox"
+    #gcc main.c -o main -O3 -lssl -lcrypto
+    eval "gcc $rg -o main -O3 -lssl -lcrypto"
 fi
 
 ./main && rm main
