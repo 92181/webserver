@@ -31,9 +31,9 @@ sudo sh run.sh
 ```
 
 ## Limitations
+- Max 1 server instance per process.
 - IPv6 only.
-- Maximum of 1 server instance per process.
-- HTTP/1.1 only (For now).
+- HTTP/1.1.
 
 ## About & Licensing
 This project is licensed under the permissive MIT license. Please consider starring the project if you like it.

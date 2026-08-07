@@ -1,9 +1,13 @@
-gcc test_server.c -o server -O3 -lssl -lcrypto
-
 if [ "$(uname -s)" = "Linux" ]; then
-    modprobe tls && gcc test_client_new.c -o test -O3 -lssl -lcrypto -libkqueue
+    gcc test_server.c -o server -O3 -flto -lssl -lcrypto -luring
+    gcc test_client.c -o test -O3 -flto -lssl -lcrypto -lkqueue
+
+    sudo modprobe tls
 else
+    gcc test_server.c -o server -O3 -lssl -lcrypto
     gcc test_client.c -o test -O3 -lssl -lcrypto
 fi
 
-./server && rm test && rm server
+sudo ./server
+
+rm -f test server

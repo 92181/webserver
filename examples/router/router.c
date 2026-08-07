@@ -1,117 +1,66 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-
 #include "../../src/server.c"
 
-#ifndef __linux__
-#include <dispatch/dispatch.h>
-
-// 1. The Background Worker Function
-void fetch_file_worker(void *c)
-{
-	//FetchContext *ctx = (FetchContext *)c;
-	//unsigned char *p=(unsigned char*)c;printf("%s\n",p); // remove line after testing.
-
-	int f=open((unsigned char*)c,O_RDONLY);
-	
-	if(f==-1) 
-	{
-		return 1;
-	};
-
-	// use stat get size!
-	struct stat d;fstat(f,&d);
-	unsigned char b=malloc(d.st_size); // was +1
-
-	// Perform the blocking read on a background thread
-	ssize_t bytesRead = read(f, b, d.st_size);
-	
-	if(bytesRead>=0) 
-	{
-		printf("Background: Read %zd bytes.\n---\n%s\n---\n", bytesRead, b);
-	} 
-	else
-	{
-		perror("Read error");
-	};
-
-	// Cleanup: Close file and free memory inside the worker or back on main
-	close(f);
-	free(b);
-	
-	printf("Done, handle data here or function callback..\n");
-};
-
-int main() 
-{
-	// Get Dispatch Queue;
-	dispatch_queue_t queue=dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT,0);
-	
-	dispatch_async_f(queue,"image.jpg",fetch_file_worker);
-
-	// 4. Keep main alive long enough to see the result
-	printf("Main: Doing other things while file fetches...\n");
-	sleep(2);
-
-	return 0;
-};
-#else
-// Linux IO_URING!
-#endif
-
-// gcc main.c -o main -O3 -lssl -lcrypto, https://[::1]:4433/
-
-unsigned char *b,*c,*qw=(unsigned char*)"\033[31mMemory Allocation Failure!\033[0m\n",*qe=(unsigned char*)"\033[31mFile Operation Failed!\n\033[0m";struct stat d;
-
-unsigned int i[4],s,a,f;//char vq[16384],*vz,*vw,*vy;
-
 // Server Router;
-static inline void router(ud *t,void *a,int u)
+static void c_recv(ud *t,void *a,int u)
 {
-  unsigned char *vz=(unsigned char*)a,*vf=vz+1024,*vw,*vy,*vq;
+  // Extract URL (HTTP GET);
+  unsigned char *s=(unsigned char*)a,*z=s+4,*e=s+u;s=z;
 
-  // Read Request And Extract URL;
-  if(1)
+  if(*z!='/'){close_socket(t);return;};
+
+  while(z<e&&*z!=' ')
   {
-    // Parse URL;
-    vw=vz;vq=vz+16384;while(vw<vq){if(*vw=='/'){vy=vw+1;while(vw<vq){if(*vw==' '){break;};vw+=1;};break;};vw+=1;};
+    z+=1;
+  };
 
-    // Write Response To Client;
-    if(vy==vw)
+  if(z==e){close_socket(t);return;}else if(*(z-1)=='/'){z-=1;};
+
+  // Route;
+  switch(*(s+1))
+  {
+    case 'h':
     {
-      // server send from test to server.c!!!
-      const unsigned char *r="Hello World!";server_send(t,r,sizeof(r)-1,0);
-      //SSL_write(q,"Hello World;",12);
+      // Send "Hello";
+      char q[]="HTTP/1.1 200\r\nContent-Length: 12\r\n\r\nHello Client";
+      
+      server_send(t,q,sizeof(q));
+
+      break;
+    }  
+    default:
+    {
+      // Send Redirect;
+      char q[]="HTTP/1.1 301 Moved Permanently\r\nLocation: https://[::1]:8000/home\r\n\r\n";
+      
+      server_send(t,q,sizeof(q));
     }
-    else if(*vy=='n')
-    {
-      const unsigned char *r="HTTP/2 200 OK\r\n\n<!doctype><html>This Is Another Page.</html>\r\n";server_send(t,r,sizeof(r)-1,0);
-      //SSL_write(q,"HTTP/2 200 OK\r\n\n<!doctype><html>This Is Another Page.</html>\r\n",61);
-    }
-    else
-    {
-      const unsigned char *r="HTTP/2 200 OK\r\n\n<!doctype><html>This Is Yet Another Page.</html>\r\n";server_send(t,r,sizeof(r)-1,0);
-      //SSL_write(q,"HTTP/2 200 OK\r\n\n<!doctype><html>This Is Yet Another Page.</html>\r\n",66);
-    };
   };
 };
 
-// Main Logic;
-/*int main(int e,char **r)
+// Close (Write Complete);
+static void c_write(ud *t,int u)
 {
-  // Load Certificates;
-  if(load_cert("../src/cert.pem","../src/key.pem")!=0)
+  close_socket(t);
+};
+
+int main()
+{
+  // Start Server;
+  cz p={.port=8000,.ip={0},.ev_recv=c_recv,.ev_write=c_write};
+
+  if(load_cert(&p,"../../src/cert.pem","../../src/key.pem")!=0)
   {
     return 1;
   };
 
-  // Start Server On Port 4433;
-  *(i+3)=16777216;start_server(i,4433,router,b,s,c,a);pthread_join(*nu,0);
+  // Start Server;
+  long x=start_server(&p);
 
-  // Return Success;
-  desrv();return 0;
+  if(x>0)
+  {
+    pthread_join(x,0);destroy_server(&p);
+  };
+  
+  return 0;
 };
-*/

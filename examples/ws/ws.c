@@ -1,134 +1,201 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <sys/stat.h>
-#include <dirent.h>
+#include <fcntl.h>
 #include <time.h>
 
-#include "src/server.c"
-#include "src/ws.h"
+#include "../../src/server.c"
+#include "../../src/ws.h"
 
-unsigned int i[4];
+const char k[]="Hello Client! (WS Connection).",h[]=
 
-typedef struct ws_client
+"HTTP/1.1 200\r\nContent-Length: 449\r\n\r\n"
+"<!doctype html>\n"
+"<html>\n"
+"  <head>\n"
+"    <meta charset=\"utf-8\">\n"
+"    <link rel=\"icon\" href=\"data:,\" type=\"image/x-icon\">\n"
+"  </head>\n"
+"  <body>\n"
+"    See console (F12).\n"
+"    <script>\n"
+"      // Setup Websocket;\n"
+"      let s=new WebSocket(\"/ws\");\n"
+"\n"
+"      s.onopen=function()\n"
+"      {\n"
+"        setTimeout(function(){s.send(\"Hello Server (WS)!\");},1500);console.log(\"Connected.\");\n"
+"      };\n"
+"\n"
+"      s.onmessage=function(m){console.log(m);};\n"
+"    </script>\n"
+"  </body>\n"
+"</html>\n";
+
+typedef struct cl
 {
-  unsigned long id;
-  //unsigned int ws_op; // to cache pos!
-  char *ws_cache,*ws_ps,*ws_pe;
+  time_t open_time;
+  unsigned char *recv, *recv_pos;
+  unsigned long recv_len;
 } cl;
 
 // Server Router;
-static void client_recv(ud *t,void *a,int u)
+static void c_recv(ud *t,void *a,int u)
 {
-  char *vz=(char*)a,*vf=vz+1024;
+  unsigned char *vz=(unsigned char*)a,*vf=vz+1024;
 
-  // Handle Request (/GET);
   if(*vz=='G')
   {
-    const char *resp = "HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nHello HTTPS!";
-    printf("Received: res: %d, text: %.*s\n",u,u,vz);
-    server_send(t,resp,strlen(resp));
-  }
-  else if(*vz!='P')
-  {
-    // Rate Limit (Optional);
-    if(0>1)
+    // Check For WebSocket Upgrade;
+    if(*(vz+5)=='w'&&*(vz+6)=='s')
     {
-      close_socket(t);
-    };
+      vz+=24;
 
+      // Skip To Key;
+      while(vz<vf&&(*vz!='K'||*(vz+1)!='e'||*(vz+2)!='y'))
+      {
+        vz+=1;
+      };
+
+      vz+=5;
+
+      // Hash Key & Send Upgrade Response;
+      unsigned char r[]="HTTP/1.1 101\r\nupgrade: websocket\r\nConnection: upgrade\r\nSec-WebSocket-Accept: xxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n\r\n";
+
+      unsigned char *h=r+sizeof(r)-33;ws_key(vz,&h);*(r+sizeof(r)-5)='\r';
+
+      server_send(t,r,sizeof(r)-1);
+    }
+    else
+    {
+      // Send HTTP/GET;
+      server_send(t,h,sizeof(h)-1);
+    };
+  }
+  else
+  {
+    unsigned char *p=vz,h;unsigned long l;
 
     // Process WebSocket Frame;
-    /*cl *j=t->d;
+    cl *j=t->data;
 
-    if(j->ws_cache==0)
+    if(j->recv==0)
     {
-      char *p=vz,h;unsigned long l;ws_header(&p,&l);h=(p-vz);
+      ws_header(&p,&l);h=(p-vz);
 
-      // Allocate Message Cache;
-      if(l+h>u)
+      // Allocate Receive Cache;
+      j->recv=malloc(l);
+      
+      if(j->recv==0)
       {
-        j->ws_cache=malloc(l);mem_copy(j->ws_cache,p,p+u-h); // free on close... (on close function/handler?)
-
-        j->ws_ps=j->ws_cache+u-h;j->ws_pe=j->ws_cache+l;
+        close_socket(t);return;
       };
+      
+      j->recv_pos=j->recv+u-h;j->recv_len=l;
+      
+      if(u-h>l)
+      {
+        u=l+h;
+      };
+      
+      mem_copy(j->recv,p,p+u-h);
     }
     else
     {
       // Add Chunk To Cache;
-      mem_copy(j->ws_ps,vz,vz+u);j->ws_ps+=u;
+      unsigned long d=j->recv_pos-j->recv;
 
-      // Message Complete;
-      if(j->ws_ps==j->ws_pe)
+      if(d<j->recv_len)
       {
-        unsigned long l=(j->ws_pe-j->ws_cache);ws_unmask(j->ws_cache,l);
-
-        // print decrypted content here
-        printf("Content:\n");
-        char *ii=j->ws_cache,*v=ii+l;while(ii<v)
-        {
-          printf("%c",*ii);ii+=1;
-        };
-        printf("\n");
-
-        // Medium MSG;
-        unsigned char g[2048],*y=g,d[]="Hello Client! Hail To Victory!";
-        mem_copy(g+10,d,d+sizeof(d)-1);ws_set(&y,sizeof(d)-1);
-
-        //server_send(t,y,sizeof(d)-1+(g+10-y));
-
-        // Free;
-        free(j->ws_cache);j->ws_cache=0;
+        if(d+u>j->recv_len){u=j->recv_len-d;};mem_copy(j->recv_pos,vz,vz+u);
+        
+        j->recv_pos+=u;
       };
-
-      printf("Chunk::Consumed: %d\n",u);
     };
 
+    // Receive Complete?
+    if(j->recv_pos>=j->recv+j->recv_len)
+    {
+      ws_unmask(j->recv,j->recv_len);l=(j->recv_len-4);printf("Message: %.*s\n",l,j->recv+4); 
 
+			free(j->recv);j->recv=0;
 
-    // WRITE BIG RESPONSE!
+      // Build & Send Message;
+      unsigned char z[10+sizeof(k)],*u=z;mem_copy(z+10,k,k+sizeof(k));
 
-
-    //unsigned char demo[]={0x81,0x05,'H','e','l','l','o'};
-    //int s=SSL_write(q,demo,sizeof(demo));printf("Write :: %d\n",s);
-
-
-    // handle ping pong;*/
-    // close_socket(s,t); // on close code
+      l=ws_set(&u,l);server_send(t,u,l);
+    };
   };
 };
 
-// Server Close Handler;
-static void client_close(ud *x)
+// Connect Event;
+static void c_open(ud *x)
 {
-  if(x->d>(char*)12)
+  // Allocate Client Memory;
+  x->data=calloc(1,sizeof(cl));
+  
+  if(x->data==0)
   {
-    free(x->d);
+    close_socket(x);return;
+  };
+
+  time_t k=time(0);((cl*)(x->data))->open_time=k;
+
+  td *t=x->thread;t->data+=1;
+
+  // Disconnect Clients (Timed, Every 10 Connects);
+  if((int)t->data>10)
+  {
+    t->data=0;
+
+    ud *y=t->ud_active,*n;
+
+    while(y!=0)
+    {
+      cl *j=y->data;n=y->next;
+
+      if(k-20>j->open_time)
+      {
+        close_socket(y);
+      };
+      
+      y=n;
+    };
   };
 };
 
-// Server Pressure Release (Socket Writable);
-static void client_drain(ud *x)
+// Close Handler;
+static void c_close(ud *x)
 {
-  printf("Backpressure Drained, WR: %d\n",x->wr);
+  cl *j=(cl*)x->data;
+
+  if(j->recv)
+  {
+    free(j->recv);j->recv=0;
+  }
+
+  free(x->data);
 };
 
 // Main Logic;
 int main()
 {
   // Start Server;
-  if(load_cert("src/cert.pem","src/key.pem")!=0)
+  cz p={.port=443,.ip={0},.ev_recv=c_recv,.ev_open=c_open,.ev_close=c_close};
+
+  if(load_cert(&p,"../../src/cert.pem","../../src/key.pem")!=0)
   {
     return 1;
   };
 
-  start_server(i,443,client_recv,client_drain,client_close);
-  
-  printf("Server Started, Threads: %d.\n",nt);
+  // Start Server;
+  long x=start_server(&p);
 
-  // Return;
-  pthread_join(*nu,0);destroy_server();
+  if(x>0)
+  {
+    pthread_join(x,0);destroy_server(&p);
+  };
   
   return 0;
 };
