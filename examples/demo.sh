@@ -18,7 +18,7 @@ if [ "$(uname -s)" = "Linux" ]; then
     eval "gcc $rg.c -o main -O3 -flto -lssl -lcrypto -luring"
     sudo modprobe tls
 else
-    eval "gcc $rg.c -o main -O3 -lssl -lcrypto"
+    exit 1
 fi
 
 sudo ./main

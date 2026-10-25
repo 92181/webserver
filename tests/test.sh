@@ -4,8 +4,7 @@ if [ "$(uname -s)" = "Linux" ]; then
 
     sudo modprobe tls
 else
-    gcc test_server.c -o server -O3 -lssl -lcrypto
-    gcc test_client.c -o test -O3 -lssl -lcrypto
+    exit 1
 fi
 
 sudo ./server

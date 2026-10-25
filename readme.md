@@ -1,9 +1,8 @@
-# WpXI - Performant & Minimal HTTP Server
+# Performant & Minimal HTTPS Server
 WpXI is a lightweight, high-performance web server library engineered for extreme efficiency and extensibility. 
-By leveraging modern kernel primitives such as io_uring on Linux and Kqueue on macOS. WpXI achieves near-native I/O throughput with minimal CPU overhead.
+By leveraging modern kernel primitives such as io_uring on Linux. WpXI achieves near-native I/O throughput with minimal CPU overhead.
 
-Built in C and powered by OpenSSL, it serves as a robust "drop-in" replacement for `python3 -m http.server` when performance, security, and customization are non-negotiable.
-Uses Kqueue for FreeBSD and MacOS, kTLS with io_uring for Linux (>5.13).
+Built in C and powered by OpenSSL, it serves as a robust "drop-in" replacement for `python3 -m http.server` when performance, security, and customization are non-negotiable. Uses kTLS with io_uring for Linux (>5.13).
 
 Why WpXI?
 * Event-Driven Architecture: Fully multi-threaded and non-blocking I/O ensures the server scales with your hardware.
@@ -31,7 +30,7 @@ sudo sh run.sh
 ```
 
 ## Limitations
-- Max 1 server instance per process.
+- Linux only.
 - IPv6 only.
 - HTTP/1.1.
 
